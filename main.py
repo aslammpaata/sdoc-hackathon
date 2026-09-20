@@ -50,18 +50,57 @@ def debug_store():
 
 
 # ---------------------------------------------------------------------------
-# Pipeline: ingest -> classify for every email in the inbox (stages 1-2 for now)
+# Pipeline: ingest -> classify -> (comparison cases only) validate -> extract -> compare
 # ---------------------------------------------------------------------------
 
 
+def analyse_case(case: dict, persist: bool = True) -> dict:
+    """Stages 3-5 for one BL_COMPARISON case: validate & route, extract, compare.
+
+    Never raises - a failure is recorded on the case so the run finishes. Writes only
+    what stage 6 needs (si, bl, comparison, review_reason, audit) in a single upsert;
+    status, has_defect and defect_fields are stage 6's call and are left absent.
+    """
+    import logging
+    from datetime import datetime, timezone
+
+    from app import compare, documents, extract, store
+
+    fields: dict = {
+        "review_reason": None,
+        "audit": {
+            "rule_version": compare.RULE_VERSION,
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    try:
+        routed = documents.validate_case(case)
+        fields["audit"]["readers_used"] = routed["readers"]
+        if routed.get("review_reason"):
+            fields["review_reason"] = str(routed["review_reason"])  # stage 3 exit, no comparison
+        else:
+            si = extract.extract_document(**routed["si"])
+            bl = extract.extract_document(**routed["bl"])
+            fields["si"], fields["bl"] = si, bl
+            fields["comparison"] = {f: str(r) for f, r in compare.compare(si, bl).items()}
+    except Exception as e:  # noqa: BLE001 - recorded on the case, never fatal to the run
+        logging.getLogger(__name__).exception("stages 3-5 failed for %s", case["email_id"])
+        fields["audit"]["error"] = f"{type(e).__name__}: {e}"[:500]
+    case.update(fields)
+    if persist:
+        store.upsert_case(case["email_id"], **fields)
+    return case
+
+
 def run_pipeline(limit: int | None = None, workers: int = 4, email_ids: list[str] | None = None) -> dict:
-    """Run stages 1-2 over the inbox and persist each case. Returns a summary."""
+    """Run stages 1-5 over the inbox and persist each case. Returns a summary."""
     import logging
     from collections import Counter
     from concurrent.futures import ThreadPoolExecutor
 
     from app.classify import classify_case
     from app.ingest import get_inbox, ingest_email
+    from app.schema import COMPARED_FIELDS, Category
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     inbox = get_inbox()
@@ -73,18 +112,28 @@ def run_pipeline(limit: int | None = None, workers: int = 4, email_ids: list[str
         emails = emails[:limit]
 
     def process(email: dict) -> dict:
-        case = ingest_email(email, inbox)
-        return classify_case(case)
+        case = classify_case(ingest_email(email, inbox))
+        # Every other category skips stages 3-5 and is left untouched for stage 6.
+        return analyse_case(case) if case.get("category") == Category.BL_COMPARISON else case
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         cases = list(pool.map(process, emails))
 
-    errors = [c["email_id"] for c in cases if c.get("classification", {}).get("error")]
+    compared = [c for c in cases if c.get("comparison")]
+    readers: Counter = Counter()
+    for case in cases:
+        readers.update((case.get("audit") or {}).get("readers_used", {}).values())
     return {
         "source": inbox.source,
         "processed": len(cases),
         "categories": dict(Counter(c["category"] for c in cases)),
-        "classification_errors": errors,
+        "readers_used": dict(readers),
+        "stage3_exits": dict(Counter(c["review_reason"] for c in cases if c.get("review_reason"))),
+        "compared": len(compared),
+        "comparison_outcomes": dict(Counter(r for c in compared for r in c["comparison"].values())),
+        "per_field": {f: dict(Counter(c["comparison"][f] for c in compared)) for f in COMPARED_FIELDS},
+        "classification_errors": [c["email_id"] for c in cases if c.get("classification", {}).get("error")],
+        "analysis_errors": [c["email_id"] for c in cases if (c.get("audit") or {}).get("error")],
     }
 
 
