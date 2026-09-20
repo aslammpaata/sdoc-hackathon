@@ -157,25 +157,33 @@ gcloud storage buckets create gs://sdoc-hackathon-attachments --location=asia-so
 gcloud projects add-iam-policy-binding sdoc-hackathon --member="serviceAccount:328117535233-compute@developer.gserviceaccount.com" --role="roles/datastore.user"
 gcloud projects add-iam-policy-binding sdoc-hackathon --member="serviceAccount:328117535233-compute@developer.gserviceaccount.com" --role="roles/storage.objectAdmin"
 ```
-Confirmed: `328117535233-compute@developer.gserviceaccount.com` already has both
-`roles/datastore.user` and `roles/storage.objectAdmin` bound. Firestore database and
-the GCS bucket both exist. Don't re-run these or report them as outstanding.
+Confirmed: `328117535233-compute@developer.gserviceaccount.com` already has
+`roles/datastore.user`, `roles/storage.objectAdmin`, **and `roles/aiplatform.user`**
+(added when Stage 2 classify.py went live — needed for the deployed service to call
+Gemini via Vertex AI; see "LLM auth" below). Firestore database and the GCS bucket
+both exist. Don't re-run these or report them as outstanding.
 
-### Still to set up — Application Default Credentials (local dev only)
-Each teammate testing the pipeline against real Firestore/GCS **from their own
-machine** (not from a Cloud Run deploy, which uses the service account above)
-needs to run this once, themselves, in a real browser — it cannot be scripted or
-delegated to an agent:
+### Application Default Credentials (local dev only) — done on Aslam's machine
+Confirmed working: `gcloud auth application-default login` +
+`gcloud auth application-default set-quota-project sdoc-hackathon` run successfully,
+and `/debug/store` round-tripped against the real Firestore project and GCS bucket
+(not a mock) — verified, not just assumed.
+
+**Still to do:** ADC is per-machine, not per-project-membership. **Every other
+teammate** who wants to run the pipeline locally against real Firestore/GCS/Vertex
+AI needs to run this once on their own laptop, in their own browser — it cannot be
+scripted or delegated to an agent:
 ```bash
 gcloud auth application-default login
 gcloud auth application-default set-quota-project sdoc-hackathon
 ```
-After that, verify locally: `.env` has `GCP_PROJECT`, `GCS_BUCKET`, and
-`INBOX_SOURCE=gs://sdoc-hackathon-attachments/dataset` set; run `uvicorn` locally,
-hit `/debug/store`, and confirm it round-trips against the real Firestore project
-and GCS bucket, not a mock. A failure here is almost always one specific
-misconfigured thing (wrong project, propagation delay, quota-project mismatch) —
-get the exact error before changing code speculatively.
+After that, each teammate should verify locally: `.env` has `GCP_PROJECT`,
+`GCS_BUCKET`, and `INBOX_SOURCE` set (`gs://sdoc-hackathon-attachments/dataset` for
+the real data, or `http://localhost:8080` if running the Docker distribution
+locally instead); run `uvicorn`, and confirm calls actually reach the real
+Firestore project and GCS bucket, not a mock. A failure here is almost always one
+specific misconfigured thing (wrong project, propagation delay, quota-project
+mismatch) — get the exact error before changing code speculatively.
 
 **Note on trusting this file:** this section previously said Firestore/Storage/IAM
 were still to set up after they had already been completed and verified — the file
@@ -184,9 +192,17 @@ know a "still to set up" line is stale; it will report exactly what's written he
 Whoever finishes a setup step from this file should edit it in the same sitting,
 as its own commit, not fold the doc update into a feature commit.
 
-## Secrets — repo goes public before the deadline
-Never commit keys. Git history keeps them even if deleted later, and flipping the
-repo public exposes anything in history.
+## LLM auth — no API key needed by default (updated after Stage 2 build)
+`llm_client.py` (built with Stage 2) defaults to **Vertex AI via ADC** — no Gemini
+API key exists anywhere in this project, committed or otherwise. On Cloud Run, ADC
+resolves to the service account, which now has `roles/aiplatform.user` (see Cloud
+setup above); locally, it resolves to whatever `gcloud auth application-default
+login` credentials are already on your machine. Nothing to provision, no secret to
+rotate, and one less thing that can leak when the repo goes public.
+
+`llm_client.py` falls back to the direct Gemini API-key backend **only** if
+`GEMINI_API_KEY` is set in the environment — kept as an escape hatch (e.g. if Vertex
+quota gets tight), not the primary path. If that fallback is ever actually used:
 
 ```bash
 gcloud secrets create gemini-api-key --replication-policy="automatic"
@@ -196,10 +212,12 @@ gcloud secrets add-iam-policy-binding gemini-api-key \
   --role="roles/secretmanager.secretAccessor"
 ```
 Then in `deploy.sh`'s deploy block: `--set-secrets=GEMINI_API_KEY=gemini-api-key:latest`
-(safe to commit — it's a reference, not a value). Code reads `os.environ["GEMINI_API_KEY"]`.
+(safe to commit — it's a reference, not a value).
 
-Confirm `.gitignore` covers `.env`, `.env.local`, `credentials/*.json`. Commit a
-`.env.example` with dummy values.
+Never commit keys regardless. Git history keeps them even if deleted later, and
+flipping the repo public exposes anything in history. Confirm `.gitignore` covers
+`.env`, `.env.local`, `credentials/*.json`. Commit a `.env.example` with dummy
+values.
 
 ## Deployment decisions (from the Sep 20 workshop, considered and settled)
 - **No CI/CD.** Cloud Build triggers were evaluated and deliberately skipped:
@@ -264,5 +282,20 @@ detection belong to a separate authenticity module. Likely judge question.
 - Revision history is a rollback button — Cloud Run → service → Revisions.
 
 ## Open items
-- Video length: 3 or 5 minutes? Confirm with organizers.
-- Team still needs adding to the GCP project as Editors (GitHub collaborators done).
+- **`POST /api/run` is synchronous, ~3.5 min for the full 520-email dataset**, against
+  Cloud Run's 300s default request timeout — fits today but with little margin.
+  Decide before Stage 3+ needs to re-run at scale: either raise the deployed
+  service's timeout (`gcloud run services update sdoc-api --region=asia-southeast1
+  --timeout=<seconds>`), or add a background/async job pattern. Whoever owns
+  Stage 3+ will also want a classify-only re-run mode that skips re-uploading
+  attachments — not built yet, flagged by Claude Code as out of scope for the
+  Stage 1–2 task.
+
+## Progress — Stages 1–2 (done, committed 8c44d9b)
+`schema.py`, `ingest.py`, `classify.py`, `llm_client.py` built and validated against
+the real 520-email dataset: 520/520 cases in Firestore, 0 missing/extra ids, 0
+classification errors, macro-F1 0.9987 scored via the organizers' `/submit` (no
+ground truth opened). `ingest.py` strips quoted history and banners before
+classification (195 quoted histories + 54 banners removed on the real inbox) and
+writes attachments to GCS with sha256 in the inventory. Stages 3–6 and the review
+templates are still untouched — next up per the task-split table above.
