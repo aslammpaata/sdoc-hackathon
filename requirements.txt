@@ -6,3 +6,6 @@ google-cloud-storage
 jinja2
 python-dotenv
 google-genai
+pypdf
+python-docx
+openpyxl
