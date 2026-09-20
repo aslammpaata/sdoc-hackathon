@@ -31,6 +31,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --region="$REGION" \
   --platform=managed \
   --allow-unauthenticated \
+  --timeout=1800 \
   --set-env-vars="GCP_PROJECT=${PROJECT_ID},GCS_BUCKET=${BUCKET},INBOX_SOURCE=${INBOX_SOURCE}"
 
 echo "==> Live at:"
