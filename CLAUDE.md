@@ -111,13 +111,22 @@ cases/{email_id}                                    # written by:
   si: { shipper: {value, original_text, source, method, confidence}, ... }        # stage 4
   bl: { ... }
   comparison: { shipper: "matched", port_of_discharge: "mismatched", ... }         # stage 5
-  status, has_defect, defect_fields                 # stage 6 — NOT WRITTEN YET (absent/null)
-  audit: { ingested_at, classified_at, extracted_at, file_hashes, readers_used, rule_version, error }
-  review: { needed, resolved_by, corrections, resolved_at }   # stage 6 / review UI — not yet
+  status, has_defect, defect_fields                 # stage 6 (null status = no comparison attempted)
+  audit: { ingested_at, classified_at, extracted_at, decided_at, file_hashes, readers_used,
+           rule_version, decision_version, stage3_exit, decision_note, undecided_fields, error }
+  review: { needed, resolved_by, note, corrections: {previous, status, defect_fields}, resolved_at }
 ```
 Firestore `set(merge=True)` merges at leaf level, so each stage upserts only its own
 keys via `store.upsert_case(email_id, **fields)`. Lists (`attachments`,
 `defect_fields`) are replaced whole, not merged.
+
+Two stage-6 rules other stages must respect:
+- **A human decision wins.** Once `review.resolved_by` is set (review UI), re-running
+  stage 6 or the whole pipeline leaves the contract fields alone. Only
+  `python main.py decide --force` / `POST /api/decide?force=true` discards it.
+- **Stage 3's exit reason lives in `audit.stage3_exit`**, because stage 6 rewrites
+  `review_reason` (the 91 "please send the draft BL" requests get null). Never read
+  `review_reason` to learn why stage 3 exited.
 
 ## Frontend
 **Server-rendered from the same FastAPI app** — Jinja2 templates, no build step, no
@@ -125,11 +134,12 @@ CORS, no second deploy target, one URL. A review queue is a list, a detail view 
 a correction form; a form post does that without a framework.
 
 ```
-GET  /review          → cases where status == NEEDS_REVIEW          (not built)
-GET  /review/{id}     → SI vs BL side by side, evidence, confidence   (not built)
-POST /review/{id}     → write correction to Firestore, redirect       (not built)
+GET  /review          → cases where status == NEEDS_REVIEW          (live)
+GET  /review/{id}     → SI vs BL side by side, evidence, confidence   (live)
+POST /review/{id}     → write correction to Firestore, 303 → /review  (live)
 GET  /api/submission  → submission.json projection                    (live)
-POST /api/run?limit=&workers=  → stages 1–5 over the inbox, sync     (live)
+POST /api/run?limit=&workers=  → stages 1–6 over the inbox, sync     (live, ~7 min)
+POST /api/decide?force=        → stage 6 only, no LLM, ~45 s          (live)
 GET  /health                                                          (live)
 GET  /debug/store     → Firestore+GCS round-trip; 404 unless DEBUG_ROUTES=1 (never on Cloud Run)
 ```
@@ -247,11 +257,11 @@ app/
                   #   doc-type from content, validate_case() -> si/bl or review_reason
   extract.py      # Stage 4 — 7 fields per document into the canonical schema
   compare.py      # Stage 5 — normalizers + comparator, NO LLM
-  decide.py       # Stage 6 — status, evidence, audit record  (NOT BUILT YET)
+  decide.py       # Stage 6 — deterministic decision + audit; apply_correction() for the UI
   store.py        # Firestore + Cloud Storage access
   llm_client.py   # single interface wrapping Gemini (Vertex AI via ADC, or API key)
   schema.py       # canonical fields + submission output shape + build_submission()
-templates/        # Jinja2 — review queue UI  (NOT BUILT YET)
+templates/        # Jinja2 — base.html, review_list.html, review_detail.html
 scripts/
   deploy.sh
   score.py        # POSTs the Firestore projection to the organizer /submit
@@ -268,7 +278,7 @@ there is no OCR engine to install. Stage 3–5 deps: `pypdf`, `python-docx`, `op
 | Ingest + Classify | Stages 1–2 | **done** — `8c44d9b`, macro-F1 1.0 |
 | Validate + Extract | Stages 3–4 | **done** — Am7-ys, merged `6a412c9` |
 | Normalize + Compare | Stage 5 | **done** — same branch, defect-F1 1.0 with a provisional rule |
-| Decide + Review UI | Stage 6 + Jinja templates + Firestore write-back | **open — the blocker.** Without it the submission has status null everywhere |
+| Decide + Review UI | Stage 6 + Jinja templates + Firestore write-back | **done** — decision v1.0, 17-case queue, correction form writes back |
 | Cloud + Test harness | Deploy script, `/submit` scoring loop, golden set | deploy + `scripts/score.py` done; golden set not |
 | Packaging | Deck, video, README — needs a name assigned now, not Monday night | open; README has SETUP.md link only |
 
@@ -298,30 +308,25 @@ detection belong to a separate authenticity module. Likely judge question.
 - The dataset plants truncated PDFs (`email_511_BL.pdf`, `email_515_BL.pdf`,
   pypdf says "EOF marker not found"). That's a review reason, not a bug to fix.
 - The collaborator branch is `origin/stage-3-5` (hyphen), not `stage-3.5`.
+- Claude Code's Bash tool silently truncates very long commands (~8 KB heredocs
+  fail with "unexpected EOF"). Write the script to a file with the Write tool and
+  run that instead.
 
 ## Open items
-- **Stage 6 (`decide.py`) — the only thing between us and a scored submission.**
-  A provisional rule was tried in a scratch script (not in the repo) and scored
-  **final_score 1.0** via `/submit`: `review_reason` set by stage 3 → NEEDS_REVIEW;
-  else any field `mismatched` → MISMATCH with those fields; else any `unreadable` →
-  NEEDS_REVIEW/unreadable, any `missing` → NEEDS_REVIEW/missing_value; else OK.
-  Start from that. Two things it got wrong on the **reliability axis** (108
-  escalations vs 20 gold, precision 0.16):
-  - **94 BL_COMPARISON emails have zero attachments** ("please send the draft BL
-    for checking"). Gold escalates only 5 `missing_attachment` in total, so ~90 of
-    these need a non-review status. Probe `/submit` for whether gold wants `OK` or
-    `null` there — don't guess, and don't open the ground truth.
-  - Gold marks 5 cases `unreadable`; we caught 2 (the truncated PDFs). The other 3
-    are almost certainly `email_512–514`, scans that our vision reader read
-    correctly. Decide: keep reading them (better product, e2e still 46/46) or
-    escalate anything read by `ocr`. Recommend keep + say so in the pitch.
-- Review UI (Jinja templates, `/review*` routes) — consumer of stage 6, not built.
+- **Stage-1 variance.** Gemini at temperature 0 still flips 2–3 "please find
+  Shipping instruction for X: POL … Shipper …" emails between SI_REQUEST and
+  BL_COMPARISON from run to run (219–223 BL_COMPARISON vs 220 gold). Stage 6 handles
+  the flips correctly (null status, no escalation), so the cost is ≈ −0.001 on
+  final. A fix belongs in classify.py (few-shot example or a "SI body pasted →
+  SI_REQUEST" tie-break) — classify owner's call, not urgent.
+- Vision-read scans (`email_512–514`) are decided as OK/MISMATCH although gold marks
+  them `unreadable` — **settled: keep**. Reliability recall 0.85 = 17/20 is this.
+  Say in the pitch: "we read scans the reference solution gave up on".
 - Classify-only / analyse-only re-run mode: `python main.py run` redoes every stage
-  including re-uploading attachments. Fine for now (~7 min), annoying for iteration.
-- Pylance: `schema.Audit` lacks `classified_at/extracted_at/readers_used/error`
-  keys that classify.py and main.py write. Harmless; one-line TypedDict fix.
+  including re-uploading attachments (~7 min). `decide` alone is 45 s.
+- `--min-instances=1` before judging — see Deployment decisions. Not done yet.
 
-## Progress — Stages 1–5 done on `main` (as of Sep 21, merge `6a412c9`)
+## Progress — Stages 1–6 + review UI done (as of Sep 21)
 - **Stages 1–2** (`8c44d9b`): `ingest.py` strips quoted history + banners before
   classification (195 + 54 removed on the real inbox), inventories attachments with
   sha256 and writes them to GCS; `classify.py` is one Gemini call over subject +
@@ -336,7 +341,20 @@ detection belong to a separate authenticity module. Likely judge question.
 - **Last full run** (`python main.py run`, ~7 min): 520 processed, 0 classification
   errors, 0 analysis errors; readers txt 192 / xlsx 22 / pdf_text 20 / docx 8 /
   ocr 6 / unreadable 2; 117 cases compared, 72 field mismatches found.
-- **Scored via `/submit`** (`scripts/score.py`): as-is final 0.30 (stage 6 absent);
-  with the provisional rule in Open items: stage-3 defect-F1 **1.0**, end-to-end
-  **46/46**, final **1.0**, reliability escalation-F1 0.27 (see Open items).
-- Nothing deployed since stages 3–5 merged — `./scripts/deploy.sh` after pulling.
+- **Stage 6 + review UI** (`decide.py`, `templates/`, `/review*`): deterministic,
+  idempotent, no LLM. Rule: non-comparison → null; zero attachments and no
+  "attached/enclosed/dropped" claim → null (`no_documents_to_compare`); stage-3
+  exit → NEEDS_REVIEW with that reason; any `mismatched` field → MISMATCH with
+  exactly those fields (unreadable/missing don't block — confident mismatch wins);
+  else unreadable → NEEDS_REVIEW/unreadable, missing → missing_value; else OK.
+  Decision 1 was settled by probing `/submit`, not guessing: the 94 zero-attachment
+  cases are 91 "please *send* the draft BL" (requests → null) + 3 "attachments
+  appear to have been dropped" (real `missing_attachment`); escalating the 91 gave
+  reliability P 0.157, null or OK both give P 1.0.
+- **Validated** (`scripts/score.py`, full stages 1–6 run): final **0.9989**,
+  end-to-end **46/46**, stage-3 defect-F1 **1.0**, reliability P **1.0** / R 0.85 /
+  F1 **0.919**, 17 escalations (5 wrong_doc_type, 5 missing_attachment, 5
+  unreadable, 2 missing_value). Contract invariants hold over all 520; a POST
+  correction through `/review/{id}` leaves the queue and updates
+  `/api/submission` immediately.
+- **Deployed:** (pending — fill in revision/tag/URL after `./scripts/deploy.sh`)
