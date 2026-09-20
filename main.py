@@ -11,9 +11,10 @@ import os  # noqa: E402
 app = FastAPI(title="SDOC — SI vs BL verification")
 templates = Jinja2Templates(directory="templates")
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def root():
-    return {"status": "ok", "message": "SDOC hackathon Hello World!"}
+    """The review queue is the front door — nobody should land on a placeholder."""
+    return RedirectResponse(url="/review", status_code=307)
 
 @app.get("/health")
 def health():
