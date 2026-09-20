@@ -6,6 +6,9 @@ REGION="asia-southeast1"
 REPO="sdoc-repo"
 IMAGE_NAME="sdoc-api"
 SERVICE_NAME="sdoc-api"
+BUCKET="sdoc-hackathon-attachments"
+# On Cloud Run the inbox is the static bundle uploaded to GCS, not the local Docker server.
+INBOX_SOURCE="gs://${BUCKET}/dataset"
 
 # Tag images by git commit so you always know exactly what code is live.
 # Falls back to a timestamp if this isn't a git repo yet.
@@ -27,7 +30,8 @@ gcloud run deploy "$SERVICE_NAME" \
   --image="$IMAGE" \
   --region="$REGION" \
   --platform=managed \
-  --allow-unauthenticated
+  --allow-unauthenticated \
+  --set-env-vars="GCP_PROJECT=${PROJECT_ID},GCS_BUCKET=${BUCKET},INBOX_SOURCE=${INBOX_SOURCE}"
 
 echo "==> Live at:"
 gcloud run services describe "$SERVICE_NAME" --region="$REGION" --format="value(status.url)"

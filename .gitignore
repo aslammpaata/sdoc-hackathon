@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SDOC dataset — lives in gs://sdoc-hackathon-attachments/dataset, never in git
+data/inbox/
+data/attachments/
+data/sample_submission.json
+.env.local
+credentials/*.json
