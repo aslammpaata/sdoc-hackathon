@@ -9,3 +9,4 @@ google-genai
 pypdf
 python-docx
 openpyxl
+python-multipart

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Review queue ({{ cases|length }}){% endblock %}
+{% block content %}
+<h1>Review queue <span class="muted">— {{ cases|length }} case{{ "" if cases|length == 1 else "s" }} need a human decision</span></h1>
+{% if not cases %}
+  <div class="empty">Nothing to review. Every comparison case was decided automatically.</div>
+{% else %}
+<table>
+  <thead><tr><th>Email</th><th>Subject</th><th>From</th><th>Reason</th><th>Undecided fields</th><th>Attachments</th></tr></thead>
+  <tbody>
+  {% for c in cases %}
+    {% set em = c.email or {} %}{% set au = c.audit or {} %}
+    <tr>
+      <td><a href="/review/{{ c.email_id }}" class="mono">{{ c.email_id }}</a></td>
+      <td>{{ em.subject }}</td>
+      <td class="muted">{{ em.sender }}</td>
+      <td><span class="pill warn">{{ c.review_reason }}</span></td>
+      <td class="mono">{{ (au.undecided_fields or [])|join(", ") or "—" }}</td>
+      <td class="muted">{{ (c.attachments or [])|length }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

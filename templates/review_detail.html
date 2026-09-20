@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ case.email_id }} — review{% endblock %}
+{% block content %}
+{% set em = case.email or {} %}
+{% set audit = case.audit or {} %}
+{% set review = case.review or {} %}
+{% set undecided = audit.undecided_fields or [] %}
+<h1><span class="mono">{{ case.email_id }}</span> &nbsp;
+  {% if case.status == "NEEDS_REVIEW" %}<span class="pill warn">NEEDS_REVIEW · {{ case.review_reason }}</span>
+  {% elif case.status == "MISMATCH" %}<span class="pill bad">MISMATCH</span>
+  {% elif case.status == "OK" %}<span class="pill ok">OK</span>
+  {% else %}<span class="pill">{{ case.category }} · no comparison</span>{% endif %}
+</h1>
+<p><strong>{{ em.subject }}</strong><br><span class="muted">from {{ em.sender }} · category {{ case.category }}</span></p>
+
+<h2>Why this case is here</h2>
+<p>
+{% if case.review_reason == "missing_attachment" %}The sender expected documents but {{ (case.attachments or [])|length }} of 2 arrived — the SI and draft BL could not both be read.
+{% elif case.review_reason == "wrong_doc_type" %}Both files were readable but they are not an SI + BL pair (one is another document type, e.g. an invoice).
+{% elif case.review_reason == "unreadable" %}{% if undecided %}These fields carried a placeholder or unreadable value on one side: <span class="mono">{{ undecided|join(", ") }}</span>.{% else %}A file could not be read (corrupt or empty) — see readers below.{% endif %}
+{% elif case.review_reason == "missing_value" %}A required field is absent from one document: <span class="mono">{{ undecided|join(", ") }}</span>.
+{% elif case.status == "MISMATCH" %}{{ (case.defect_fields or [])|length }} field(s) differ from the SI: <span class="mono">{{ (case.defect_fields or [])|join(", ") }}</span>.
+{% elif case.status == "OK" %}All 7 fields agree.
+{% else %}No documents were compared{% if audit.decision_note %} ({{ audit.decision_note }}){% endif %}.
+{% endif %}
+{% if audit.error %}<br><span class="pill bad">pipeline error</span> <span class="mono">{{ audit.error }}</span>{% endif %}
+</p>
+
+{% if case.si or case.bl %}
+<h2>SI vs BL — SI is the source of truth</h2>
+<table>
+  <thead><tr><th style="width:12%">Field</th><th style="width:38%">Shipping Instruction</th><th style="width:38%">Draft Bill of Lading</th><th>Outcome</th></tr></thead>
+  <tbody>
+  {% for f in fields %}
+    {% set s = (case.si or {}).get(f) or {} %}{% set b = (case.bl or {}).get(f) or {} %}{% set r = (case.comparison or {}).get(f) %}
+    <tr>
+      <td class="mono">{{ f }}</td>
+      {% for side in (s, b) %}
+      <td>
+        <div><strong>{{ side.value if side.value is not none else "—" }}</strong></div>
+        {% if side.original_text %}<div class="muted mono">“{{ side.original_text }}”</div>{% endif %}
+        <div class="muted mono">{{ side.source or "" }}{% if side.method %} · {{ side.method }}{% endif %}{% if side.confidence is not none %} · conf {{ "%.2f"|format(side.confidence) }}{% endif %}</div>
+      </td>
+      {% endfor %}
+      <td class="r-{{ r }}">{{ r or "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>Attachments &amp; readers</h2>
+{% if case.attachments %}
+<table>
+  <thead><tr><th>File</th><th>Declared</th><th>Read as</th><th>Size</th><th>sha256</th><th>Stored at</th></tr></thead>
+  <tbody>
+  {% for a in case.attachments %}
+    <tr><td class="mono">{{ a.filename }}</td><td>{{ a.declared_type }}</td>
+        <td>{{ (audit.readers_used or {}).get(a.filename, "—") }}</td><td>{{ a.size_bytes }} B</td>
+        <td class="mono muted">{{ a.sha256[:16] }}…</td><td class="mono muted">{{ a.gcs_uri }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No attachments on this email.</p>{% endif %}
+
+<h2>Email (cleaned — quoted history and banners removed)</h2>
+<pre>{{ em.body }}</pre>
+
+<h2>Audit</h2>
+<p class="mono muted">decided {{ audit.decided_at }} · decision v{{ audit.decision_version }} · compare rules v{{ audit.rule_version }} · classified {{ audit.classified_at }} · ingested {{ audit.ingested_at }}</p>
+{% if review.resolved_by %}
+<p><span class="pill ok">resolved</span> by <strong>{{ review.resolved_by }}</strong> at {{ review.resolved_at }}{% if review.note %} — “{{ review.note }}”{% endif %}
+   <span class="muted">(previously {{ review.corrections.previous.status if review.corrections and review.corrections.previous else "?" }})</span></p>
+{% endif %}
+
+<h2>Your decision</h2>
+<form class="correct" method="post" action="/review/{{ case.email_id }}">
+  <div class="row">
+    <label><input type="radio" name="status" value="OK" {% if case.status == "OK" %}checked{% endif %}> OK — documents agree</label>
+    <label><input type="radio" name="status" value="MISMATCH" {% if case.status == "MISMATCH" %}checked{% endif %}> MISMATCH — fields below differ</label>
+    <label><input type="radio" name="status" value="NEEDS_REVIEW" {% if case.status == "NEEDS_REVIEW" or not case.status %}checked{% endif %}> Still needs review</label>
+  </div>
+  <div class="row">
+    {% for f in fields %}<label><input type="checkbox" name="defect_fields" value="{{ f }}" {% if f in (case.defect_fields or []) %}checked{% endif %}> <span class="mono">{{ f }}</span></label>{% endfor %}
+  </div>
+  <div class="row">
+    <label style="flex:1">Reviewer<br><input type="text" name="resolved_by" placeholder="your name" required></label>
+    <label style="flex:2">Note (optional)<br><input type="text" name="note" placeholder="e.g. weight on BL is a typo, confirmed with the line"></label>
+  </div>
+  <button type="submit">Save decision</button>
+  <span class="muted"> — writes to Firestore and updates submission.json immediately.</span>
+</form>
+{% endblock %}

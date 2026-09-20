@@ -237,17 +237,25 @@ class Classification(TypedDict, total=False):
 
 
 class Audit(TypedDict, total=False):
-    ingested_at: str
+    ingested_at: str  # stage 1
+    classified_at: str  # stage 2
+    extracted_at: str  # stages 3-5
+    decided_at: str  # stage 6
     file_hashes: dict[str, str]  # filename -> sha256
-    readers_used: dict[str, str]  # filename -> ExtractionMethod
-    rule_version: str
-    processed_at: str  # ISO-8601 UTC
+    readers_used: dict[str, str]  # filename -> ExtractionMethod or "unreadable"
+    rule_version: str  # compare.RULE_VERSION
+    decision_version: str  # decide.DECISION_VERSION
+    stage3_exit: str | None  # ReviewReason stage 3 exited with, kept after stage 6 rewrites review_reason
+    decision_note: str | None  # e.g. "no_documents_to_compare"
+    undecided_fields: list[str]  # fields that were unreadable/missing at decision time
+    error: str | None  # stages 3-5 failure, recorded not raised
 
 
 class Review(TypedDict, total=False):
     needed: bool
     resolved_by: str | None
     corrections: dict[str, object]
+    note: str | None
     resolved_at: str | None
 
 
