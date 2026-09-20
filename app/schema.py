@@ -8,7 +8,7 @@ you change it for every stage at once, which is the point.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, TypedDict
+from typing import Iterable, Literal, Mapping, TypedDict
 
 # ---------------------------------------------------------------------------
 # Compared fields — SI is the source of truth, BL is checked against it.
@@ -155,12 +155,89 @@ def empty_submission_entry(category: Category | str = Category.GENERAL) -> Submi
     )
 
 
+def to_submission_entry(case: Mapping | None) -> SubmissionEntry:
+    """Project one case onto the exact contract shape - nothing more, nothing less.
+
+    Tolerates a case at any stage: missing keys fall back to the stage-2 defaults
+    (status/review_reason null, has_defect false, defect_fields []). A case with no
+    category yet (stage 1 only) is reported as GENERAL rather than omitted.
+    """
+    entry = empty_submission_entry()
+    if not case:
+        return entry
+    for key in SUBMISSION_KEYS:
+        if case.get(key) is not None:
+            entry[key] = case[key]  # type: ignore[literal-required]
+    entry["category"] = str(entry["category"])
+    entry["status"] = None if entry["status"] is None else str(entry["status"])
+    entry["review_reason"] = None if entry["review_reason"] is None else str(entry["review_reason"])
+    entry["has_defect"] = bool(entry["has_defect"])
+    entry["defect_fields"] = [str(f) for f in (entry["defect_fields"] or [])]
+    return entry
+
+
+def build_submission(cases: Mapping[str, Mapping] | Iterable[Mapping], email_ids: Iterable[str]) -> Submission:
+    """submission.json for every id in `email_ids` (the sample_submission keys).
+
+    Pure: takes cases already loaded (dict keyed by email_id, or an iterable of
+    case dicts) and never crashes or drops an id - an email with no case at all
+    gets the default GENERAL entry. Sorted by email_id for stable diffs.
+    """
+    by_id: Mapping[str, Mapping]
+    if isinstance(cases, Mapping):
+        by_id = cases
+    else:
+        by_id = {c["email_id"]: c for c in cases}
+    return {eid: to_submission_entry(by_id.get(eid)) for eid in sorted(email_ids)}
+
+
 # ---------------------------------------------------------------------------
 # Firestore case document — the single record every stage reads and writes.
 # ---------------------------------------------------------------------------
 
 
+class RawEmail(TypedDict):
+    """The email record exactly as the inbox served it (audit copy, never edited)."""
+
+    email_id: str
+    subject: str
+    body: str
+    attachments: list[str]  # paths as given, e.g. "attachments/email_004_SI.txt"
+    sender: str  # the inbox's "from" key, renamed because `from` is reserved
+
+
+class CleanedEmail(TypedDict):
+    """What stages 2+ read: quoted history and banners already stripped."""
+
+    subject: str
+    body: str
+    sender: str
+    cleaning: dict[str, object]  # what was removed and why, for audit
+
+
+class AttachmentInfo(TypedDict):
+    """Stage-1 inventory entry: metadata only, content is stage 3's job."""
+
+    filename: str
+    path: str  # as given by the inbox
+    declared_type: str  # extension, lower-case, no dot ("txt", "pdf", ...)
+    size_bytes: int
+    sha256: str
+    gcs_uri: str
+
+
+class Classification(TypedDict, total=False):
+    """Stage-2 evidence for the category decision."""
+
+    confidence: float
+    reason: str
+    model: str
+    prompt_version: str
+    error: str | None
+
+
 class Audit(TypedDict, total=False):
+    ingested_at: str
     file_hashes: dict[str, str]  # filename -> sha256
     readers_used: dict[str, str]  # filename -> ExtractionMethod
     rule_version: str
@@ -176,7 +253,11 @@ class Review(TypedDict, total=False):
 
 class Case(TypedDict, total=False):
     email_id: str
-    category: Category | str
+    email: CleanedEmail
+    raw_email: RawEmail
+    attachments: list[AttachmentInfo]
+    category: Category | str | None  # None until stage 2 has run
+    classification: Classification
     status: Status | str | None
     review_reason: ReviewReason | str | None
     has_defect: bool
@@ -186,4 +267,3 @@ class Case(TypedDict, total=False):
     comparison: Comparison
     audit: Audit
     review: Review
-    attachments: dict[str, str]  # filename -> gs:// uri

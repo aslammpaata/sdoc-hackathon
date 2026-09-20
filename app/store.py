@@ -21,14 +21,9 @@ from typing import Iterable
 from google.cloud import firestore, storage
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from app.schema import (
-    SUBMISSION_KEYS,
-    Case,
-    Status,
-    Submission,
-    SubmissionEntry,
-    empty_submission_entry,
-)
+from app.schema import Case, Status, Submission
+from app.schema import build_submission as schema_build_submission
+from app.schema import to_submission_entry  # noqa: F401  (re-exported for callers)
 
 PROJECT_ID = os.environ.get("GCP_PROJECT", "sdoc-hackathon")
 CASES_COLLECTION = os.environ.get("FIRESTORE_COLLECTION", "cases")
@@ -127,25 +122,12 @@ def sha256(data: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
-def to_submission_entry(case: Case) -> SubmissionEntry:
-    """Project one case onto the exact contract shape — nothing more, nothing less."""
-    entry = empty_submission_entry()
-    for key in SUBMISSION_KEYS:
-        if key in case:
-            entry[key] = case[key]  # type: ignore[literal-required]
-    entry["has_defect"] = bool(entry["has_defect"])
-    entry["defect_fields"] = list(entry["defect_fields"] or [])
-    return entry
-
-
 def build_submission(email_ids: Iterable[str] | None = None) -> Submission:
-    """submission.json as a projection over all cases.
+    """submission.json as a projection over all cases in Firestore.
 
-    Pass the inbox's email_ids to guarantee every one is present: any id with
-    no case yet gets a default GENERAL entry rather than being silently absent
-    (a missing key is scored as wrong for that email).
+    Pass the inbox's email_ids (sample_submission.json keys) so every one is
+    present even before its case exists; see schema.build_submission.
     """
-    submission: Submission = {c["email_id"]: to_submission_entry(c) for c in list_cases()}
-    for email_id in email_ids or ():
-        submission.setdefault(email_id, empty_submission_entry())
-    return dict(sorted(submission.items()))
+    cases = list_cases()
+    ids = set(email_ids or ()) | {c["email_id"] for c in cases}
+    return schema_build_submission(cases, ids)
