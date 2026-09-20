@@ -228,25 +228,28 @@ values.
 
 ## Repo structure
 ```
+main.py           # FastAPI entrypoint + run_pipeline() (repo root — Dockerfile runs `uvicorn main:app`)
 app/
-  main.py         # FastAPI entrypoint, routes
-  ingest.py       # Stage 1
-  classify.py     # Stage 2
-  validate.py     # Stage 3 — format detection, doc-type verification, reader routing
-  readers/        # txt.py, pdf.py, docx.py, xlsx.py, ocr.py
-  extract.py      # Stage 4
+  ingest.py       # Stage 1 — get_inbox() (INBOX_SOURCE: http/gs/local), cleaning, attachment inventory
+  classify.py     # Stage 2 — Gemini, subject + body + inventory in one prompt
+  documents.py    # Stage 3 — format sniffed from bytes, readers (txt/pdf/docx/xlsx, vision for scans),
+                  #   doc-type from content, validate_case() -> si/bl or review_reason
+  extract.py      # Stage 4 — 7 fields per document into the canonical schema
   compare.py      # Stage 5 — normalizers + comparator, NO LLM
-  decide.py       # Stage 6 — status, evidence, audit record
+  decide.py       # Stage 6 — status, evidence, audit record  (NOT BUILT YET)
   store.py        # Firestore + Cloud Storage access
-  llm_client.py   # single interface wrapping Gemini
-  schema.py       # canonical fields + submission output shape
-templates/        # Jinja2 — review queue UI
+  llm_client.py   # single interface wrapping Gemini (Vertex AI via ADC, or API key)
+  schema.py       # canonical fields + submission output shape + build_submission()
+templates/        # Jinja2 — review queue UI  (NOT BUILT YET)
 scripts/
   deploy.sh
-  score.py        # wraps inbox.submit(...)
-data/             # participant bundle: inbox/, attachments/, loader.py
-tests/golden_set/ # hand-labelled cases
+  score.py        # POSTs the Firestore projection to the organizer /submit
+data/loader.py    # participant loader; inbox/, attachments/, sample_submission.json are gitignored
+                  #   (they live in gs://sdoc-hackathon-attachments/dataset)
+tests/golden_set/ # hand-labelled cases  (NOT BUILT YET)
 ```
+Scanned PDFs/images are read by Gemini's vision (`llm_client.generate(media=...)`) —
+there is no OCR engine to install. Stage 3–5 deps: `pypdf`, `python-docx`, `openpyxl`.
 
 ## Task split
 | Workstream | Covers |
