@@ -1,113 +1,242 @@
 # SDOC Hackathon — Project Context
 
-**Event:** Averis x Monash Hackathon 2026. Team of 2–5. Problem: shipping document
-verification (email inbox → classify → compare SI vs BL → discrepancy report).
+**Event:** Averis x Monash Hackathon 2026. Problem: shipping document verification
+(email inbox → classify → compare SI vs BL → discrepancy report).
 
 ## Timeline
-- Prelim submission: **Tue 22 Sep, 12:00 PM** (GitHub repo, live deployment, slide
-  deck, demo video — length is disputed between rules doc (5 min) and event site
-  (3 min); confirm with organizers, penalty is 1 mark per 30s over).
-- Feature freeze target: Sun 20 midnight. Mon 21 = packaging only (README, deck,
-  video), not building.
-- Finals (if shortlisted): 26 Sep. Final submission must be an *extension* of
-  the prelim entry — don't build throwaway code.
+- **Prelim submission: Tue 22 Sep, 12:00 PM.** Five deliverables: project description,
+  GitHub repo + README with setup instructions, live public deployment, slide deck
+  (architecture / implementation / challenges / roadmap), demo video.
+- Video length is disputed: rules doc says 5 min, event site says 3 min. Penalty is
+  1 mark per 30s over. **Confirm with organizers.**
+- Mon 21 Sep is packaging day — README, deck, video. Not building.
+- Finals (if shortlisted) 26 Sep. Final submission must be an *extension* of the
+  prelim entry, so don't build throwaway code.
 
-## Scoring — what actually earns points
-Prelim rubric (100 pts): Working Core Prototype 25, System Design & Architecture
-15, Technology Integration 15, Technical Feasibility & Validation 15, Problem
-Statement Understanding 10, Innovation & Solution Approach 10, Practical Value
-10. **65 points are "it works, architecture is sound, you can prove it."**
+## Scoring — what earns points
+Prelim rubric (100): Working Core Prototype 25, System Design & Architecture 15,
+Technology Integration 15, Technical Feasibility & Validation 15, Problem Statement
+Understanding 10, Innovation & Solution Approach 10, Practical Value 10.
+**65 points are "it works, the architecture is sound, you can prove it."**
 
-Self-eval formula: 50% end-to-end (defects caught fully) + 30% Stage-1 macro-F1
-+ 20% Stage-3 defect-F1. `NEEDS_REVIEW` handling scored as a **separate
-reliability axis, outside the above** — escalating a case you could have scored
-forfeits points on both end-to-end and defect-F1. Escalate only when you
-genuinely cannot decide, not to hedge.
+Self-eval formula: 50% end-to-end + 30% Stage-1 macro-F1 + 20% Stage-3 defect-F1.
+`NEEDS_REVIEW` handling is scored on a **separate reliability axis, outside that
+formula** — escalating a case you could have decided forfeits points twice over.
+Escalate only when genuinely undecidable.
 
-Two hard rules: AI must be a key component (no pure-regex solution). Cloud
-infra must be *meaningfully* integrated (named managed services doing real
-work — storage, queue, managed AI — not just a hosted frontend) or scores may
-be reduced significantly.
+Macro-F1 means rare categories count as much as common ones. Don't let the
+classifier ignore small classes.
+
+Two hard rules: AI must be a key component (no pure-regex solution); cloud infra
+must be *meaningfully* integrated (named managed services doing real work) or
+scores may be reduced significantly.
 
 ## Output contract (must match exactly)
 ```
 submission[email_id] = {
   "category":      "BL_COMPARISON" | "SI_REQUEST" | "INVOICE_QUERY" | "GENERAL" | "SPAM",
-  "status":         "OK" | "MISMATCH" | "NEEDS_REVIEW",      # BL_COMPARISON only, else null
-  "review_reason":  "wrong_doc_type" | "missing_attachment" | "unreadable" | "missing_value" | null,
-  "has_defect":     bool,
-  "defect_fields":  [...]
+  "status":        "OK" | "MISMATCH" | "NEEDS_REVIEW" | null,
+  "review_reason": "wrong_doc_type" | "missing_attachment" | "unreadable" | "missing_value" | null,
+  "has_defect":    bool,
+  "defect_fields": [...]
 }
 ```
-Every `email_id` in the dataset must be present. Match `sample_submission.json` exactly.
+Every `email_id` present. Match `sample_submission.json` exactly.
 
 **7 compared fields:** shipper, consignee, notify_party, port_of_loading,
-port_of_discharge, container_count, gross_weight_kg. SI is the source of truth.
-Field labels differ across documents (e.g. "Port of Loading" vs "Load Port") —
-map to canonical schema during extraction, not during comparison.
+port_of_discharge, container_count, gross_weight_kg. SI is source of truth.
+Labels differ between documents ("Port of Loading" vs "Load Port") — map to
+canonical schema at extraction time, not at comparison time.
 
-## Architecture — 6-stage pipeline, one FastAPI service
-0. **Ingest** — pull email + attachments via `loader.py`, write to Cloud Storage, create case record.
-1. **Classify** — LLM call, structured JSON out, category + confidence. Use subject + body + attachment info, never subject alone (misleading subjects are a known trap in the dataset).
-2. **Extract** — per attachment: identify doc type first (catches `wrong_doc_type`), then extract to canonical schema. Every field returns `{value, evidence_snippet, confidence}`, `value: null` if absent.
-3. **Normalize + compare** — deterministic, no LLM. Handle: case/whitespace, corporate suffixes (Pte Ltd / Sdn Bhd / Inc), port aliases + UN/LOCODE, container count formats, weight units. Emit per-field reason code: `matched` | `matched_after_normalisation` | `mismatched` | `unreadable` | `missing`.
-4. **Decide status** — a confident mismatch beats partial uncertainty; don't escalate to NEEDS_REVIEW if you've already found a real defect elsewhere.
-5. **Review queue** — human-in-the-loop UI: SI/BL values side by side, evidence snippet, reason code, confirm/correct that writes back and updates the report.
+## Architecture — 6 stages, one FastAPI service
+1. **Ingest & Clean** — pull email + attachments, strip quoted reply history and
+   warning banners before anything downstream reads them, preserve raw record for
+   audit, write attachments to Cloud Storage.
+2. **Classify** — 5-way category from the cleaned record. Subject + body +
+   attachment inventory together, never subject alone (misleading subjects are a
+   known trap in the dataset).
+3. **Validate & Route** — comparison requests only: confirm SI and BL both present,
+   detect real file format (not the extension), verify business document type by
+   content, select reader (TXT / PDF / DOCX / XLSX / OCR). Unusable cases exit here
+   to review, before extraction cost is spent.
+4. **Extract** — each field into canonical schema with original text, source
+   location, extraction method, confidence.
+5. **Normalize & Compare** — deterministic, no LLM. Party names, ports, container
+   counts, weight units normalized before comparison. Reason code per field:
+   matched / matched_after_normalisation / mismatched / unreadable / missing.
+   **Most of the score lives here.**
+6. **Decide, Evidence & Audit** — final status with side-by-side evidence, review
+   queue entry when undecidable, persisted audit record (file hashes, extraction
+   methods, rule version).
 
-Keep all LLM calls behind one interface (`llm_client.py`) — swap point if
-rate-limited mid-hackathon.
+A confident mismatch beats partial uncertainty: if one field clearly differs and
+another is unreadable, report MISMATCH, not NEEDS_REVIEW.
 
-## Cloud setup — already done manually, do not redo
-- GCP project ID: `sdoc-hackathon`
-- Region: `asia-southeast1` (Singapore — nearest to KL)
-- Artifact Registry repo: `sdoc-repo` (docker format), created and working
-- Billing: Free Trial, $300 credit / 90 days — should not incur real cost at this scale
-- Cloud Run service: currently `sdoc-hello` (hello-world proof), **rename to
-  `sdoc-api`** on first real deploy
-- Deploy loop, proven working end-to-end:
-  ```
-  docker build -t hello-cloudrun .
-  docker tag hello-cloudrun asia-southeast1-docker.pkg.dev/sdoc-hackathon/sdoc-repo/hello-cloudrun:v1
-  docker push asia-southeast1-docker.pkg.dev/sdoc-hackathon/sdoc-repo/hello-cloudrun:v1
-  gcloud run deploy sdoc-api --image=asia-southeast1-docker.pkg.dev/sdoc-hackathon/sdoc-repo/hello-cloudrun:v1 --region=asia-southeast1 --platform=managed --allow-unauthenticated
-  ```
-- **Cloud Run reads `$PORT` env var at runtime — never hardcode a port** in the
-  app or Dockerfile CMD.
-- Public reachability verified from a phone on cellular data, not just localhost/wifi.
-- Not yet set up: IAM roles for Vertex AI / Firestore / Storage access from the
-  Cloud Run service account (needed the moment real pipeline code calls
-  Gemini/Firestore/Storage — will fail with PermissionDenied until granted).
-  Secrets (Gemini API key) must go via `--set-env-vars` or Secret Manager,
-  never hardcoded — repo will be public.
+Review queue UI is a *consumer* of stage 6 output, not a seventh stage.
 
-## Repo structure (target)
+Keep all LLM calls behind one interface (`llm_client.py`) — swap point if rate-limited.
+
+## Multilingual — confirmed present in the real dataset
+Non-English documents are in the sample data (verified by inspection, not assumed).
+This is **not** a separate pipeline stage — it's a requirement on stages 4 and 5.
+
+- Extraction maps labels to canonical field names regardless of source language and
+  keeps original text as evidence.
+- Normalization resolves ports to UN/LOCODE so equivalents compare equal:
+  `装货港: 上海，中国` → `port_of_loading = CNSHA` ← `Port of Loading: Shanghai, China`
+- **Language alone must never produce a mismatch.**
+- Port alias table and party-name normalizer need non-English entries; CJK text
+  needs handling Latin-script rules won't cover.
+
+## Storage & data model
+**Cloud Run's filesystem is ephemeral** — anything written to local disk is lost
+when the instance scales to zero or a new revision deploys. State must live outside
+the container.
+
+- **Firestore** (Native mode, asia-southeast1) — single `cases` collection keyed by
+  `email_id`. Review queue is a query (`where status == "NEEDS_REVIEW"`), not a
+  second collection. `submission.json` is a projection over the same collection, so
+  report and UI can't disagree.
+- **Cloud Storage** (`gs://sdoc-hackathon-attachments`) — attachment files, one
+  folder per email_id. Needed so the review UI can show source documents and the
+  audit record's file hashes point at stable objects.
+
+```
+cases/{email_id}
+  category, status, review_reason, has_defect, defect_fields
+  si: { shipper: {value, original_text, source, method, confidence}, ... }
+  bl: { ... }
+  comparison: { shipper: "matched", port_of_discharge: "mismatched", ... }
+  audit: { file_hashes, readers_used, rule_version, processed_at }
+  review: { needed, resolved_by, corrections, resolved_at }
+```
+
+## Frontend
+**Server-rendered from the same FastAPI app** — Jinja2 templates, no build step, no
+CORS, no second deploy target, one URL. A review queue is a list, a detail view and
+a correction form; a form post does that without a framework.
+
+```
+GET  /review          → cases where status == NEEDS_REVIEW
+GET  /review/{id}     → SI vs BL side by side, evidence, confidence
+POST /review/{id}     → write correction to Firestore, redirect
+GET  /api/submission  → submission.json projection
+GET  /health
+```
+
+API stays under `/api/*` so it never collides with UI routes.
+
+Exception: if the frontend owner is genuinely much faster in React, build a static
+bundle and serve it from the same container via `StaticFiles`. Still one URL, still
+no CORS. Do not split to Vercel — the cold-start risk it solves is better solved
+with `--min-instances=1` before judging.
+
+## Cloud setup — done, do not redo
+- GCP project: `sdoc-hackathon` (project number 328117535233)
+- Region: `asia-southeast1`
+- Artifact Registry: `sdoc-repo`
+- Cloud Run service: **`sdoc-api`**, live and publicly reachable (verified from a
+  phone on cellular, not just localhost)
+- Billing: Free Trial, $300 / 90 days. No auto-billing unless someone manually
+  upgrades. This project should cost ~$0.
+- Deploy: `./scripts/deploy.sh` from Git Bash. Builds, pushes, deploys, prints the
+  URL. Tags images by git commit hash (`-dirty` suffix if uncommitted changes), so
+  the running image always traces to exact code.
+- **Deploying does not create a new URL.** Cloud Run reuses the same service and
+  link; it swaps which code answers.
+- Everyone deploys to the *same* service. Pull `main` before deploying, and say so
+  in the group chat, or you'll overwrite a teammate's version.
+
+### Still to set up
+```bash
+gcloud services enable firestore.googleapis.com storage.googleapis.com secretmanager.googleapis.com
+gcloud firestore databases create --location=asia-southeast1
+gcloud storage buckets create gs://sdoc-hackathon-attachments --location=asia-southeast1
+
+# service account needs these or every call fails with PermissionDenied
+gcloud projects add-iam-policy-binding sdoc-hackathon --member="serviceAccount:328117535233-compute@developer.gserviceaccount.com" --role="roles/datastore.user"
+gcloud projects add-iam-policy-binding sdoc-hackathon --member="serviceAccount:328117535233-compute@developer.gserviceaccount.com" --role="roles/storage.objectAdmin"
+```
+
+## Secrets — repo goes public before the deadline
+Never commit keys. Git history keeps them even if deleted later, and flipping the
+repo public exposes anything in history.
+
+```bash
+gcloud secrets create gemini-api-key --replication-policy="automatic"
+printf "THE_KEY" | gcloud secrets versions add gemini-api-key --data-file=-
+gcloud secrets add-iam-policy-binding gemini-api-key \
+  --member="serviceAccount:328117535233-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+Then in `deploy.sh`'s deploy block: `--set-secrets=GEMINI_API_KEY=gemini-api-key:latest`
+(safe to commit — it's a reference, not a value). Code reads `os.environ["GEMINI_API_KEY"]`.
+
+Confirm `.gitignore` covers `.env`, `.env.local`, `credentials/*.json`. Commit a
+`.env.example` with dummy values.
+
+## Deployment decisions (from the Sep 20 workshop, considered and settled)
+- **No CI/CD.** Cloud Build triggers were evaluated and deliberately skipped:
+  `deploy.sh` already removes the friction, and wiring triggers means granting the
+  Cloud Build SA `run.admin` + `iam.serviceAccountUser`, which is an IAM fight not
+  worth the remaining hours. Revisit only if genuinely ahead.
+- **No Vercel / frontend split.** See Frontend above.
+- **No Postgres / Cloud SQL.** Firestore needs no instance, no pooling, no schema.
+- **`--min-instances=1` before judging**, not now:
+  `gcloud run services update sdoc-api --region=asia-southeast1 --min-instances=1`
+  Stops scale-to-zero so judges never hit a cold start. Costs a couple of dollars
+  across the judging window against the $300 credit.
+
+## Repo structure
 ```
 app/
-  main.py         # FastAPI entrypoint
-  ingest.py       # Stage 0
-  classify.py     # Stage 1
-  extract.py      # Stage 2
-  compare.py      # Stage 3 — normalizers + comparator, no LLM
-  decide.py       # Stage 4
-  review.py       # Stage 5
+  main.py         # FastAPI entrypoint, routes
+  ingest.py       # Stage 1
+  classify.py     # Stage 2
+  validate.py     # Stage 3 — format detection, doc-type verification, reader routing
+  readers/        # txt.py, pdf.py, docx.py, xlsx.py, ocr.py
+  extract.py      # Stage 4
+  compare.py      # Stage 5 — normalizers + comparator, NO LLM
+  decide.py       # Stage 6 — status, evidence, audit record
+  store.py        # Firestore + Cloud Storage access
   llm_client.py   # single interface wrapping Gemini
   schema.py       # canonical fields + submission output shape
-frontend/         # review queue UI
+templates/        # Jinja2 — review queue UI
 scripts/
-  deploy.sh       # wraps the 4-command deploy loop above
-  score.py        # wraps inbox.submit(...) for local scoring
+  deploy.sh
+  score.py        # wraps inbox.submit(...)
 data/             # participant bundle: inbox/, attachments/, loader.py
-tests/golden_set/ # hand-labelled ~10 emails for fast local iteration
+tests/golden_set/ # hand-labelled cases
 ```
 
-## Known gotchas already hit
-- `\` line continuation fails in `cmd.exe` — use one line, or `^` for continuation.
-- Docker Desktop must be running before `docker build` — check tray icon.
-- Dockerfile must be named exactly `Dockerfile`, no extension, for `docker build .` to find it without `-f`.
-- Organizer Docker bundle (`sdoc-hackathon-docker`) contains the answer key at
-  `/secrets` — do not open `ground_truth.json`. Use only `/submit` endpoint or
-  `score_cli.py`. Flag this to organizers.
+## Task split
+| Workstream | Covers |
+| --- | --- |
+| Ingest + Classify | Stages 1–2 |
+| Validate + Extract | Stages 3–4 — **heaviest row**, two people if you have five |
+| Normalize + Compare | Stage 5 — highest score-per-effort, give to the most meticulous person |
+| Decide + Review UI | Stage 6 + Jinja templates + Firestore write-back |
+| Cloud + Test harness | Deploy script, `/submit` scoring loop, golden set |
+| Packaging | Deck, video, README — needs a name assigned now, not Monday night |
 
-## Open items to confirm with organizers
-- Video length: 3 min (event site) vs 5 min (rules doc) — confirm which governs.
-- Any sponsor cloud credits available.
+## Scope boundary (state this in the pitch)
+The system verifies SI/BL **consistency**, not document **authenticity**. Sender
+verification, malware scanning, signatures, issuer validation and alteration
+detection belong to a separate authenticity module. Likely judge question.
+
+## Known gotchas already hit
+- `\` line continuation fails in `cmd.exe` — use one line, or `^`. Git Bash is fine.
+- Docker Desktop must be running before `docker build`.
+- Dockerfile must be named exactly `Dockerfile` for `docker build .` to find it.
+- **Cloud Run injects `$PORT` at runtime — never hardcode a port.**
+- Cloud Run local disk is ephemeral. Persist to Firestore/GCS, never to disk.
+- Organizer Docker bundle (`sdoc-hackathon-docker`) contains the answer key at
+  `data_v2/ground_truth.json`. **Do not open it.** Use `/submit` or `score_cli.py`
+  only. Flagged to organizers.
+- Cloud Run logs, not your terminal, hold Python tracebacks:
+  `gcloud run services logs read sdoc-api --region=asia-southeast1 --limit=50`
+- Revision history is a rollback button — Cloud Run → service → Revisions.
+
+## Open items
+- Video length: 3 or 5 minutes? Confirm with organizers.
+- Team still needs adding to the GCP project as Editors (GitHub collaborators done).
