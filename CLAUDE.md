@@ -147,7 +147,7 @@ with `--min-instances=1` before judging.
 - Everyone deploys to the *same* service. Pull `main` before deploying, and say so
   in the group chat, or you'll overwrite a teammate's version.
 
-### Still to set up
+### Firestore + Storage — done, do not redo
 ```bash
 gcloud services enable firestore.googleapis.com storage.googleapis.com secretmanager.googleapis.com
 gcloud firestore databases create --location=asia-southeast1
@@ -157,6 +157,32 @@ gcloud storage buckets create gs://sdoc-hackathon-attachments --location=asia-so
 gcloud projects add-iam-policy-binding sdoc-hackathon --member="serviceAccount:328117535233-compute@developer.gserviceaccount.com" --role="roles/datastore.user"
 gcloud projects add-iam-policy-binding sdoc-hackathon --member="serviceAccount:328117535233-compute@developer.gserviceaccount.com" --role="roles/storage.objectAdmin"
 ```
+Confirmed: `328117535233-compute@developer.gserviceaccount.com` already has both
+`roles/datastore.user` and `roles/storage.objectAdmin` bound. Firestore database and
+the GCS bucket both exist. Don't re-run these or report them as outstanding.
+
+### Still to set up — Application Default Credentials (local dev only)
+Each teammate testing the pipeline against real Firestore/GCS **from their own
+machine** (not from a Cloud Run deploy, which uses the service account above)
+needs to run this once, themselves, in a real browser — it cannot be scripted or
+delegated to an agent:
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project sdoc-hackathon
+```
+After that, verify locally: `.env` has `GCP_PROJECT`, `GCS_BUCKET`, and
+`INBOX_SOURCE=gs://sdoc-hackathon-attachments/dataset` set; run `uvicorn` locally,
+hit `/debug/store`, and confirm it round-trips against the real Firestore project
+and GCS bucket, not a mock. A failure here is almost always one specific
+misconfigured thing (wrong project, propagation delay, quota-project mismatch) —
+get the exact error before changing code speculatively.
+
+**Note on trusting this file:** this section previously said Firestore/Storage/IAM
+were still to set up after they had already been completed and verified — the file
+just hadn't been updated to match reality. An agent reading CLAUDE.md has no way to
+know a "still to set up" line is stale; it will report exactly what's written here.
+Whoever finishes a setup step from this file should edit it in the same sitting,
+as its own commit, not fold the doc update into a feature commit.
 
 ## Secrets — repo goes public before the deadline
 Never commit keys. Git history keeps them even if deleted later, and flipping the
