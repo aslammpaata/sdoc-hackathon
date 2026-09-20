@@ -77,6 +77,10 @@ def get_case(email_id: str) -> Case | None:
     return snap.to_dict() if snap.exists else None  # type: ignore[return-value]
 
 
+def delete_case(email_id: str) -> None:
+    _cases().document(email_id).delete()
+
+
 def list_cases() -> list[Case]:
     return [snap.to_dict() for snap in _cases().stream()]  # type: ignore[misc]
 
@@ -107,6 +111,10 @@ def put_attachment(email_id: str, filename: str, data: bytes) -> str:
 
 def get_attachment(email_id: str, filename: str) -> bytes:
     return _bucket().blob(attachment_blob_name(email_id, filename)).download_as_bytes()
+
+
+def delete_attachment(email_id: str, filename: str) -> None:
+    _bucket().blob(attachment_blob_name(email_id, filename)).delete()
 
 
 def sha256(data: bytes) -> str:
