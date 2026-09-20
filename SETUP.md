@@ -181,6 +181,7 @@ rather than changing code.
 | Run on the first N emails only | `python main.py run 20` |
 | Re-run only cases whose classification errored | `python main.py retry-errors` |
 | Current submission.json | `curl http://127.0.0.1:8000/api/submission` |
+| Score against the organizer server | `python scripts/score.py --summary` (needs the Docker inbox running on :8080; raw JSON without `--summary`) |
 | Deploy to Cloud Run | `git pull` first, then `./scripts/deploy.sh` (Docker Desktop must be running; tell the group chat) |
 | Read production logs | `gcloud run services logs read sdoc-api --region=asia-southeast1 --limit=50` |
 
