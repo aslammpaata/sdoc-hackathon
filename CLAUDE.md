@@ -357,7 +357,9 @@ detection belong to a separate authenticity module. Likely judge question.
   unreadable, 2 missing_value). Contract invariants hold over all 520; a POST
   correction through `/review/{id}` leaves the queue and updates
   `/api/submission` immediately.
-- **Deployed Sep 21:** image `sdoc-api:0275eb2` → revision `sdoc-api-00003-wtq`,
-  https://sdoc-api-he56zusm2a-as.a.run.app — `/health`, `/review` (17 rows),
-  `/review/{id}`, `/api/submission` (520 entries, real statuses) all verified live;
-  `/debug/store` 404s as intended; timeout 1800; no errors in logs.
+- **Deployed Sep 21:** image `sdoc-api:3b11341` → revision `sdoc-api-00004-m8b`,
+  https://sdoc-api-he56zusm2a-as.a.run.app — verified live: `/` 307 → `/review`,
+  `/health`, `/review` (17 rows), `/review/{id}`, `/api/submission` (520 entries,
+  OK 66 / MISMATCH 46 / NEEDS_REVIEW 17 / null 391); `/debug/store` 404s as
+  intended; timeout 1800; `.dockerignore` keeps `.env` and `.git` out of the image;
+  no errors in logs. `--min-instances` still unset (do it just before judging).
