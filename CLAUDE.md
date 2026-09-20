@@ -141,7 +141,10 @@ with `--min-instances=1` before judging.
   upgrades. This project should cost ~$0.
 - Deploy: `./scripts/deploy.sh` from Git Bash. Builds, pushes, deploys, prints the
   URL. Tags images by git commit hash (`-dirty` suffix if uncommitted changes), so
-  the running image always traces to exact code.
+  the running image always traces to exact code. Sets `GCP_PROJECT`, `GCS_BUCKET`,
+  `INBOX_SOURCE` env vars and pins `--timeout=1800`.
+- Cloud Run request timeout: **1800s** (raised from the 300s default on Sep 20,
+  revision `sdoc-api-00002-kc6`). Full-inbox `POST /api/run` takes ~3.5 min.
 - **Deploying does not create a new URL.** Cloud Run reuses the same service and
   link; it swaps which code answers.
 - Everyone deploys to the *same* service. Pull `main` before deploying, and say so
@@ -170,20 +173,12 @@ and `/debug/store` round-tripped against the real Firestore project and GCS buck
 (not a mock) — verified, not just assumed.
 
 **Still to do:** ADC is per-machine, not per-project-membership. **Every other
-teammate** who wants to run the pipeline locally against real Firestore/GCS/Vertex
-AI needs to run this once on their own laptop, in their own browser — it cannot be
-scripted or delegated to an agent:
-```bash
-gcloud auth application-default login
-gcloud auth application-default set-quota-project sdoc-hackathon
-```
-After that, each teammate should verify locally: `.env` has `GCP_PROJECT`,
-`GCS_BUCKET`, and `INBOX_SOURCE` set (`gs://sdoc-hackathon-attachments/dataset` for
-the real data, or `http://localhost:8080` if running the Docker distribution
-locally instead); run `uvicorn`, and confirm calls actually reach the real
-Firestore project and GCS bucket, not a mock. A failure here is almost always one
-specific misconfigured thing (wrong project, propagation delay, quota-project
-mismatch) — get the exact error before changing code speculatively.
+teammate** who wants to run the pipeline locally needs to do it once on their own
+laptop — follow **`SETUP.md`** (fresh laptop → running local server). Steps 5–6
+there are the browser-only logins that cannot be scripted or delegated to an
+agent; step 10 has the `/debug/store` round-trip check. A failure there is almost
+always one specific misconfigured thing (wrong project, missing ADC login,
+quota-project mismatch) — get the exact error before changing code speculatively.
 
 **Note on trusting this file:** this section previously said Firestore/Storage/IAM
 were still to set up after they had already been completed and verified — the file
@@ -282,14 +277,9 @@ detection belong to a separate authenticity module. Likely judge question.
 - Revision history is a rollback button — Cloud Run → service → Revisions.
 
 ## Open items
-- **`POST /api/run` is synchronous, ~3.5 min for the full 520-email dataset**, against
-  Cloud Run's 300s default request timeout — fits today but with little margin.
-  Decide before Stage 3+ needs to re-run at scale: either raise the deployed
-  service's timeout (`gcloud run services update sdoc-api --region=asia-southeast1
-  --timeout=<seconds>`), or add a background/async job pattern. Whoever owns
-  Stage 3+ will also want a classify-only re-run mode that skips re-uploading
-  attachments — not built yet, flagged by Claude Code as out of scope for the
-  Stage 1–2 task.
+- Whoever owns Stage 3+ will want a classify-only re-run mode that skips
+  re-uploading attachments — not built yet (`python main.py run` redoes stages 1–2).
+  The 300s timeout concern is resolved: service timeout is now 1800s, see Cloud setup.
 
 ## Progress — Stages 1–2 (done, committed 8c44d9b)
 `schema.py`, `ingest.py`, `classify.py`, `llm_client.py` built and validated against
