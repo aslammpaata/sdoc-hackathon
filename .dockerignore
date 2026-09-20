@@ -1,0 +1,24 @@
+# Never bake local config or secrets into the image — Cloud Run gets its env from deploy.sh
+.env
+.env.*
+!.env.example
+credentials/
+
+# Not needed at runtime
+.git
+.gitignore
+.kilo
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.vscode
+.idea
+
+# Dataset lives in gs://sdoc-hackathon-attachments/dataset, not in the image
+data/inbox
+data/attachments
+data/sample_submission.json
