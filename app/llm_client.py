@@ -72,9 +72,12 @@ def generate(
     json_schema: dict[str, Any] | None = None,
     temperature: float = 0.0,
     max_output_tokens: int = 1024,
+    media: tuple[bytes, str] | None = None,
 ) -> str:
     """Return the model's text. With `json_schema`, output is constrained to that
-    JSON shape (Gemini response_schema) — callers should still `json.loads` it."""
+    JSON shape (Gemini response_schema) — callers should still `json.loads` it.
+    `media` is (bytes, mime_type) — a scanned PDF or an image the model reads
+    directly, which is why nothing in this repo needs an OCR engine."""
     config = types.GenerateContentConfig(
         system_instruction=system,
         temperature=temperature,
@@ -83,11 +86,14 @@ def generate(
         response_schema=json_schema,
         thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
     )
+    contents: Any = prompt
+    if media is not None:
+        contents = [types.Part.from_bytes(data=media[0], mime_type=media[1]), prompt]
     delay = 1.0
     for attempt in range(1, MAX_RETRIES + 1):
         _throttle()
         try:
-            resp = _client().models.generate_content(model=MODEL, contents=prompt, config=config)
+            resp = _client().models.generate_content(model=MODEL, contents=contents, config=config)
             if not resp.text:
                 raise RuntimeError(f"empty response (finish_reason={_finish_reason(resp)})")
             return resp.text
