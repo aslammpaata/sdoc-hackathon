@@ -102,14 +102,22 @@ the container.
   audit record's file hashes point at stable objects.
 
 ```
-cases/{email_id}
-  category, status, review_reason, has_defect, defect_fields
-  si: { shipper: {value, original_text, source, method, confidence}, ... }
+cases/{email_id}                                    # written by:
+  email: { subject, body, sender, cleaning }        # stage 1 (cleaned)
+  raw_email: { subject, body, sender, attachments } # stage 1 (verbatim, audit)
+  attachments: [ {filename, path, declared_type, size_bytes, sha256, gcs_uri} ]
+  category, classification: { confidence, reason, model, prompt_version, error }  # stage 2
+  review_reason                                     # stage 3 (null if it went on to compare)
+  si: { shipper: {value, original_text, source, method, confidence}, ... }        # stage 4
   bl: { ... }
-  comparison: { shipper: "matched", port_of_discharge: "mismatched", ... }
-  audit: { file_hashes, readers_used, rule_version, processed_at }
-  review: { needed, resolved_by, corrections, resolved_at }
+  comparison: { shipper: "matched", port_of_discharge: "mismatched", ... }         # stage 5
+  status, has_defect, defect_fields                 # stage 6 — NOT WRITTEN YET (absent/null)
+  audit: { ingested_at, classified_at, extracted_at, file_hashes, readers_used, rule_version, error }
+  review: { needed, resolved_by, corrections, resolved_at }   # stage 6 / review UI — not yet
 ```
+Firestore `set(merge=True)` merges at leaf level, so each stage upserts only its own
+keys via `store.upsert_case(email_id, **fields)`. Lists (`attachments`,
+`defect_fields`) are replaced whole, not merged.
 
 ## Frontend
 **Server-rendered from the same FastAPI app** — Jinja2 templates, no build step, no
@@ -117,11 +125,13 @@ CORS, no second deploy target, one URL. A review queue is a list, a detail view 
 a correction form; a form post does that without a framework.
 
 ```
-GET  /review          → cases where status == NEEDS_REVIEW
-GET  /review/{id}     → SI vs BL side by side, evidence, confidence
-POST /review/{id}     → write correction to Firestore, redirect
-GET  /api/submission  → submission.json projection
-GET  /health
+GET  /review          → cases where status == NEEDS_REVIEW          (not built)
+GET  /review/{id}     → SI vs BL side by side, evidence, confidence   (not built)
+POST /review/{id}     → write correction to Firestore, redirect       (not built)
+GET  /api/submission  → submission.json projection                    (live)
+POST /api/run?limit=&workers=  → stages 1–5 over the inbox, sync     (live)
+GET  /health                                                          (live)
+GET  /debug/store     → Firestore+GCS round-trip; 404 unless DEBUG_ROUTES=1 (never on Cloud Run)
 ```
 
 API stays under `/api/*` so it never collides with UI routes.
@@ -144,7 +154,8 @@ with `--min-instances=1` before judging.
   the running image always traces to exact code. Sets `GCP_PROJECT`, `GCS_BUCKET`,
   `INBOX_SOURCE` env vars and pins `--timeout=1800`.
 - Cloud Run request timeout: **1800s** (raised from the 300s default on Sep 20,
-  revision `sdoc-api-00002-kc6`). Full-inbox `POST /api/run` takes ~3.5 min.
+  revision `sdoc-api-00002-kc6`). Full-inbox `POST /api/run` takes ~7 min with
+  stages 1–5 (was ~3.5 min for stages 1–2 alone).
 - **Deploying does not create a new URL.** Cloud Run reuses the same service and
   link; it swaps which code answers.
 - Everyone deploys to the *same* service. Pull `main` before deploying, and say so
@@ -252,14 +263,14 @@ Scanned PDFs/images are read by Gemini's vision (`llm_client.generate(media=...)
 there is no OCR engine to install. Stage 3–5 deps: `pypdf`, `python-docx`, `openpyxl`.
 
 ## Task split
-| Workstream | Covers |
-| --- | --- |
-| Ingest + Classify | Stages 1–2 |
-| Validate + Extract | Stages 3–4 — **heaviest row**, two people if you have five |
-| Normalize + Compare | Stage 5 — highest score-per-effort, give to the most meticulous person |
-| Decide + Review UI | Stage 6 + Jinja templates + Firestore write-back |
-| Cloud + Test harness | Deploy script, `/submit` scoring loop, golden set |
-| Packaging | Deck, video, README — needs a name assigned now, not Monday night |
+| Workstream | Covers | Status (Sep 21) |
+| --- | --- | --- |
+| Ingest + Classify | Stages 1–2 | **done** — `8c44d9b`, macro-F1 1.0 |
+| Validate + Extract | Stages 3–4 | **done** — Am7-ys, merged `6a412c9` |
+| Normalize + Compare | Stage 5 | **done** — same branch, defect-F1 1.0 with a provisional rule |
+| Decide + Review UI | Stage 6 + Jinja templates + Firestore write-back | **open — the blocker.** Without it the submission has status null everywhere |
+| Cloud + Test harness | Deploy script, `/submit` scoring loop, golden set | deploy + `scripts/score.py` done; golden set not |
+| Packaging | Deck, video, README — needs a name assigned now, not Monday night | open; README has SETUP.md link only |
 
 ## Scope boundary (state this in the pitch)
 The system verifies SI/BL **consistency**, not document **authenticity**. Sender
@@ -278,17 +289,54 @@ detection belong to a separate authenticity module. Likely judge question.
 - Cloud Run logs, not your terminal, hold Python tracebacks:
   `gcloud run services logs read sdoc-api --region=asia-southeast1 --limit=50`
 - Revision history is a rollback button — Cloud Run → service → Revisions.
+- **Python on Windows: always pass `encoding="utf-8"`** to `read_text`/`write_text`.
+  The default is cp1252 — an em dash written that way broke `import main` with
+  `SyntaxError: Non-UTF-8 code`, and a cp1252 read of a UTF-8 file mojibakes it.
+- Vertex AI 429 `RESOURCE_EXHAUSTED` under a thread pool: `llm_client` defaults to
+  the `global` endpoint, 4 workers, 8 retries — one regional endpoint with 8 workers
+  dropped 11 of 520 calls. `python main.py retry-errors` re-runs failed classifications.
+- The dataset plants truncated PDFs (`email_511_BL.pdf`, `email_515_BL.pdf`,
+  pypdf says "EOF marker not found"). That's a review reason, not a bug to fix.
+- The collaborator branch is `origin/stage-3-5` (hyphen), not `stage-3.5`.
 
 ## Open items
-- Whoever owns Stage 3+ will want a classify-only re-run mode that skips
-  re-uploading attachments — not built yet (`python main.py run` redoes stages 1–2).
-  The 300s timeout concern is resolved: service timeout is now 1800s, see Cloud setup.
+- **Stage 6 (`decide.py`) — the only thing between us and a scored submission.**
+  A provisional rule was tried in a scratch script (not in the repo) and scored
+  **final_score 1.0** via `/submit`: `review_reason` set by stage 3 → NEEDS_REVIEW;
+  else any field `mismatched` → MISMATCH with those fields; else any `unreadable` →
+  NEEDS_REVIEW/unreadable, any `missing` → NEEDS_REVIEW/missing_value; else OK.
+  Start from that. Two things it got wrong on the **reliability axis** (108
+  escalations vs 20 gold, precision 0.16):
+  - **94 BL_COMPARISON emails have zero attachments** ("please send the draft BL
+    for checking"). Gold escalates only 5 `missing_attachment` in total, so ~90 of
+    these need a non-review status. Probe `/submit` for whether gold wants `OK` or
+    `null` there — don't guess, and don't open the ground truth.
+  - Gold marks 5 cases `unreadable`; we caught 2 (the truncated PDFs). The other 3
+    are almost certainly `email_512–514`, scans that our vision reader read
+    correctly. Decide: keep reading them (better product, e2e still 46/46) or
+    escalate anything read by `ocr`. Recommend keep + say so in the pitch.
+- Review UI (Jinja templates, `/review*` routes) — consumer of stage 6, not built.
+- Classify-only / analyse-only re-run mode: `python main.py run` redoes every stage
+  including re-uploading attachments. Fine for now (~7 min), annoying for iteration.
+- Pylance: `schema.Audit` lacks `classified_at/extracted_at/readers_used/error`
+  keys that classify.py and main.py write. Harmless; one-line TypedDict fix.
 
-## Progress — Stages 1–2 (done, committed 8c44d9b)
-`schema.py`, `ingest.py`, `classify.py`, `llm_client.py` built and validated against
-the real 520-email dataset: 520/520 cases in Firestore, 0 missing/extra ids, 0
-classification errors, macro-F1 0.9987 scored via the organizers' `/submit` (no
-ground truth opened). `ingest.py` strips quoted history and banners before
-classification (195 quoted histories + 54 banners removed on the real inbox) and
-writes attachments to GCS with sha256 in the inventory. Stages 3–6 and the review
-templates are still untouched — next up per the task-split table above.
+## Progress — Stages 1–5 done on `main` (as of Sep 21, merge `6a412c9`)
+- **Stages 1–2** (`8c44d9b`): `ingest.py` strips quoted history + banners before
+  classification (195 + 54 removed on the real inbox), inventories attachments with
+  sha256 and writes them to GCS; `classify.py` is one Gemini call over subject +
+  body + inventory. Stage-1 macro-F1 **1.0** on the last full run (0.9987 the run
+  before — expect ±1 email between runs).
+- **Stages 3–5** (Am7-ys, `origin/stage-3-5`, merged `6a412c9`): `documents.py`
+  sniffs format from bytes, reads txt/pdf/docx/xlsx and hands scans to Gemini
+  vision, picks SI/BL by content (98/98 SI, 89/89 BL txt files correct; the 5
+  "BL" files that are commercial invoices are gold's 5 `wrong_doc_type`);
+  `extract.py` one schema-constrained call per document; `compare.py`
+  deterministic, UN/LOCODE port aliases with CJK/Arabic entries.
+- **Last full run** (`python main.py run`, ~7 min): 520 processed, 0 classification
+  errors, 0 analysis errors; readers txt 192 / xlsx 22 / pdf_text 20 / docx 8 /
+  ocr 6 / unreadable 2; 117 cases compared, 72 field mismatches found.
+- **Scored via `/submit`** (`scripts/score.py`): as-is final 0.30 (stage 6 absent);
+  with the provisional rule in Open items: stage-3 defect-F1 **1.0**, end-to-end
+  **46/46**, final **1.0**, reliability escalation-F1 0.27 (see Open items).
+- Nothing deployed since stages 3–5 merged — `./scripts/deploy.sh` after pulling.
