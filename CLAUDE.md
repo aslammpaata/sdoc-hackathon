@@ -357,4 +357,7 @@ detection belong to a separate authenticity module. Likely judge question.
   unreadable, 2 missing_value). Contract invariants hold over all 520; a POST
   correction through `/review/{id}` leaves the queue and updates
   `/api/submission` immediately.
-- **Deployed:** (pending — fill in revision/tag/URL after `./scripts/deploy.sh`)
+- **Deployed Sep 21:** image `sdoc-api:0275eb2` → revision `sdoc-api-00003-wtq`,
+  https://sdoc-api-he56zusm2a-as.a.run.app — `/health`, `/review` (17 rows),
+  `/review/{id}`, `/api/submission` (520 entries, real statuses) all verified live;
+  `/debug/store` 404s as intended; timeout 1800; no errors in logs.
