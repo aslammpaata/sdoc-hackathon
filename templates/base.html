@@ -2,39 +2,25 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}SDOC review{% endblock %}</title>
-  <style>
-    :root { --ink:#1f2328; --muted:#636c76; --line:#d0d7de; --bg:#f6f8fa; --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --accent:#0969da; }
-    body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:#fff; }
-    header { background:var(--bg); border-bottom:1px solid var(--line); padding:12px 24px; display:flex; gap:24px; align-items:baseline; }
-    header a { color:var(--ink); text-decoration:none; font-weight:600; }
-    header nav a { font-weight:400; color:var(--accent); margin-right:16px; }
-    main { padding:20px 24px; max-width:1400px; }
-    h1 { font-size:20px; margin:0 0 12px; } h2 { font-size:15px; margin:24px 0 8px; }
-    table { border-collapse:collapse; width:100%; }
-    th, td { border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
-    th { background:var(--bg); font-weight:600; }
-    .muted { color:var(--muted); } .mono { font-family:ui-monospace, Consolas, monospace; font-size:12px; }
-    .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; border:1px solid var(--line); }
-    .pill.ok { color:var(--ok); } .pill.bad { color:var(--bad); } .pill.warn { color:var(--warn); }
-    .r-matched, .r-matched_after_normalisation { color:var(--ok); }
-    .r-mismatched { color:var(--bad); font-weight:600; }
-    .r-unreadable, .r-missing { color:var(--warn); font-weight:600; }
-    pre { background:var(--bg); border:1px solid var(--line); padding:10px; white-space:pre-wrap; font-size:12px; }
-    form.correct { border:1px solid var(--line); padding:14px 16px; background:var(--bg); max-width:720px; }
-    form.correct label { display:block; margin:4px 0; }
-    form.correct .row { display:flex; gap:24px; flex-wrap:wrap; margin-bottom:10px; }
-    form.correct input[type=text] { width:100%; box-sizing:border-box; padding:6px; border:1px solid var(--line); }
-    button { padding:7px 14px; background:var(--accent); color:#fff; border:0; border-radius:6px; font-weight:600; cursor:pointer; }
-    .empty { padding:24px; color:var(--muted); border:1px dashed var(--line); }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}SDOC{% endblock %} · SDOC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <a href="/review">SDOC — SI vs BL verification</a>
-  <nav><a href="/review">Review queue</a><a href="/api/submission">submission.json</a><a href="/docs">API</a></nav>
-</header>
+<div class="topbar"><div class="inner">
+  <a class="brand" href="/"><span class="dot"></span>SDOC · SI vs BL verification</a>
+  <nav>
+    <a href="/" {% if nav == 'home' %}class="active"{% endif %}>Dashboard</a>
+    <a href="/cases" {% if nav == 'cases' %}class="active"{% endif %}>Cases</a>
+    <a href="/review" {% if nav == 'review' %}class="active"{% endif %}>Review queue</a>
+    <a href="/api/submission">submission.json</a>
+    <a href="/docs">API</a>
+  </nav>
+</div></div>
 <main>{% block content %}{% endblock %}</main>
+<footer>Averis × Monash Hackathon 2026 · FastAPI on Cloud Run · Firestore · Cloud Storage · Gemini on Vertex AI · verifies SI/BL consistency, not document authenticity.</footer>
 </body>
 </html>

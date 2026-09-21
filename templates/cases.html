@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Cases{% endblock %}
+{% macro status_pill(s) -%}
+  {%- if s == 'OK' %}<span class="status status-ok">OK</span>
+  {%- elif s == 'MISMATCH' %}<span class="status status-mismatch">MISMATCH</span>
+  {%- elif s == 'NEEDS_REVIEW' %}<span class="status status-review">NEEDS_REVIEW</span>
+  {%- else %}<span class="status status-na">n/a</span>{% endif -%}
+{%- endmacro %}
+{% block content %}
+<h1>Cases <span class="soft" style="font-weight:400">— {{ rows|length }} of {{ total }}</span></h1>
+
+<form class="filters card" method="get" action="/cases" style="margin:12px 0 14px">
+  <label>Status
+    <select name="status">
+      <option value="">any</option>
+      {% for s in ('OK', 'MISMATCH', 'NEEDS_REVIEW', 'null') %}<option value="{{ s }}" {% if f.status == s %}selected{% endif %}>{{ 'not applicable (null)' if s == 'null' else s }}</option>{% endfor %}
+    </select></label>
+  <label>Category
+    <select name="category">
+      <option value="">any</option>
+      {% for c in categories %}<option value="{{ c }}" {% if f.category == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select></label>
+  <label>Review reason
+    <select name="reason">
+      <option value="">any</option>
+      {% for r in reasons %}<option value="{{ r }}" {% if f.reason == r %}selected{% endif %}>{{ r }}</option>{% endfor %}
+    </select></label>
+  <button type="submit">Filter</button>
+  <a class="btn secondary" href="/cases">Clear</a>
+  <label style="margin-left:auto">Jump to email_id
+    <span class="row" style="gap:6px"><input class="mono" type="text" name="q" placeholder="email_512" value="{{ f.q or '' }}" size="12"><button type="submit">Go</button></span></label>
+</form>
+
+{% if not_found %}<p class="notice">No case <span class="mono">{{ not_found }}</span> in this dataset.</p>{% endif %}
+
+{% if not rows %}
+  <div class="empty">No cases match these filters.</div>
+{% else %}
+<div class="scroll">
+<table>
+  <thead><tr><th>Email</th><th>Category</th><th>Status</th><th>Reason / defects</th><th>Subject</th><th>From</th></tr></thead>
+  <tbody>
+  {% for c in rows %}
+    <tr>
+      <td><a class="mono" href="/cases/{{ c.email_id }}">{{ c.email_id }}</a></td>
+      <td><span class="tag cat">{{ c.category }}</span></td>
+      <td>{{ status_pill(c.status) }}</td>
+      <td class="mono small">
+        {%- if c.status == 'MISMATCH' %}{{ c.defect_fields|join(', ') }}
+        {%- elif c.status == 'NEEDS_REVIEW' %}{{ c.review_reason }}
+        {%- elif (c.audit or {}).get('decision_note') == 'no_documents_to_compare' %}<span class="soft">no documents to compare</span>
+        {%- else %}<span class="soft">—</span>{% endif -%}
+      </td>
+      <td>{{ (c.email or {}).get('subject', '') }}</td>
+      <td class="soft small">{{ (c.email or {}).get('sender', '') }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

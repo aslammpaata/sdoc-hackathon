@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+{% set o = overview %}
+<h1>Shipping document verification</h1>
+<p class="soft">Every email in the inbox is classified; document-check requests have their Shipping Instruction compared field by field against the draft Bill of Lading. What the system could not decide is waiting in the <a href="/review">review queue</a>. Everything below is aggregated live from the case records{% if o.cached_seconds is not none %} (cached {{ o.cached_seconds }}s){% endif %}.</p>
+
+<div class="grid tiles" style="margin-top:16px">
+  <div class="tile"><div class="n">{{ o.processed }}</div><div class="l">emails processed</div></div>
+  <a class="tile ok" href="/cases?status=OK"><div class="n">{{ o.statuses.get('OK', 0) }}</div><div class="l">OK — SI and BL agree</div></a>
+  <a class="tile mismatch" href="/cases?status=MISMATCH"><div class="n">{{ o.statuses.get('MISMATCH', 0) }}</div><div class="l">MISMATCH — defects found</div></a>
+  <a class="tile review" href="/review"><div class="n">{{ o.statuses.get('NEEDS_REVIEW', 0) }}</div><div class="l">escalated to a human</div></a>
+  <a class="tile na" href="/cases?status=null"><div class="n">{{ o.statuses.get('null', 0) }}</div><div class="l">no comparison applies</div></a>
+</div>
+
+<div class="grid two" style="margin-top:14px">
+  <div class="card">
+    <h3>Categories</h3>
+    <div class="bars">
+      {% for k, v in o.categories %}
+        <a class="k" href="/cases?category={{ k }}">{{ k }}</a><div class="b"><i style="width:{{ (100 * v / o.processed)|round(1) }}%"></i></div><div class="v">{{ v }}</div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="card">
+    <h3>How attachments were read</h3>
+    <div class="bars">
+      {% for k, v in o.readers %}
+        <span class="k">{{ o.reader_labels.get(k, k) }}</span><div class="b"><i class="{{ 'danger' if k == 'unreadable' else ('warn' if k == 'ocr' else '') }}" style="width:{{ (100 * v / o.readers_total)|round(1) }}%"></i></div><div class="v">{{ v }}</div>
+      {% endfor %}
+    </div>
+    <p class="small soft" style="margin-top:8px">Format is sniffed from the bytes, never the extension. Scans go to Gemini's vision — no OCR engine.</p>
+  </div>
+</div>
+
+<div class="grid two" style="margin-top:14px">
+  <div class="card">
+    <h3>Why cases were escalated</h3>
+    {% if o.reasons %}
+    <div class="bars">
+      {% for k, v in o.reasons %}
+        <a class="k" href="/review">{{ k }}</a><div class="b"><i class="warn" style="width:{{ (100 * v / o.statuses.get('NEEDS_REVIEW', 1))|round(1) }}%"></i></div><div class="v">{{ v }}</div>
+      {% endfor %}
+    </div>
+    {% else %}<p class="soft">Nothing escalated.</p>{% endif %}
+    <p style="margin-top:10px"><a class="btn" href="/review">Open the review queue →</a></p>
+  </div>
+  <div class="card">
+    <h3>Fields that differed (across all MISMATCH cases)</h3>
+    {% if o.defects %}
+    <div class="bars">
+      {% for k, v in o.defects %}
+        <span class="k">{{ k }}</span><div class="b"><i class="danger" style="width:{{ (100 * v / o.defects_max)|round(1) }}%"></i></div><div class="v">{{ v }}</div>
+      {% endfor %}
+    </div>
+    {% else %}<p class="soft">No defects recorded.</p>{% endif %}
+  </div>
+</div>
+
+{% if tour %}
+<h2>Hard cases — a tour of the sample dataset</h2>
+<p class="soft small" style="margin-top:-4px">Hand-picked from this dataset's 520 emails; each link opens the full six-stage trace.</p>
+<div class="tour">
+  {% for t in tour %}
+  <a href="/cases/{{ t.email_id }}">
+    <div class="id"><span>{{ t.email_id }}</span>{% if t.status == 'OK' %}<span class="status status-ok">OK</span>{% elif t.status == 'MISMATCH' %}<span class="status status-mismatch">MISMATCH</span>{% elif t.status == 'NEEDS_REVIEW' %}<span class="status status-review">REVIEW</span>{% else %}<span class="status status-na">n/a</span>{% endif %}</div>
+    <div class="t">{{ t.title }}</div>
+    <div class="d">{{ t.blurb }}</div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2>Where to look</h2>
+<div class="row">
+  <a class="btn" href="/cases">Browse all {{ o.processed }} cases</a>
+  <a class="btn secondary" href="/review">Review queue ({{ o.statuses.get('NEEDS_REVIEW', 0) }})</a>
+  <a class="btn secondary" href="/api/submission">submission.json</a>
+  <a class="btn secondary" href="/docs">API reference</a>
+</div>
+{% endblock %}
