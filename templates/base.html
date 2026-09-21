@@ -3,24 +3,73 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
   <title>{% block title %}SDOC{% endblock %} · SDOC</title>
+  {# Applied before first paint so a chosen theme never flashes the other one. #}
+  <script>try{var t=localStorage.getItem('sdoc-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<div class="topbar"><div class="inner">
-  <a class="brand" href="/"><span class="dot"></span>SDOC · SI vs BL verification</a>
-  <nav>
-    <a href="/" {% if nav == 'home' %}class="active"{% endif %}>Dashboard</a>
-    <a href="/cases" {% if nav == 'cases' %}class="active"{% endif %}>Cases</a>
-    <a href="/review" {% if nav == 'review' %}class="active"{% endif %}>Review queue</a>
-    <a href="/api/submission">submission.json</a>
-    <a href="/docs">API</a>
-  </nav>
-</div></div>
-<main>{% block content %}{% endblock %}</main>
-<footer>Averis × Monash Hackathon 2026 · FastAPI on Cloud Run · Firestore · Cloud Storage · Gemini on Vertex AI · verifies SI/BL consistency, not document authenticity.</footer>
+<a class="skip" href="#main">Skip to main content</a>
+
+{% macro nav_links(prefix) %}
+  <a class="nav-link" href="/" {% if nav == 'home' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1"/><rect x="9" y="9" width="5.5" height="5.5" rx="1"/></svg>
+    Dashboard</a>
+  <a class="nav-link" href="/cases" {% if nav == 'cases' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 3.5h12M2 8h12M2 12.5h12"/></svg>
+    Cases</a>
+  <a class="nav-link" href="/review" {% if nav == 'review' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 1.8 14.5 13.5h-13L8 1.8Z"/><path d="M8 6.4v3.1M8 11.4v.1"/></svg>
+    Review queue</a>
+{% endmacro %}
+
+<header class="shell">
+  <div class="shell-in">
+    <a class="brand" href="/">
+      <span class="mark" aria-hidden="true"></span>
+      <span>SDOC <span class="sub">SI vs BL verification</span></span>
+    </a>
+
+    <nav class="nav" aria-label="Operations">{{ nav_links('d') }}</nav>
+    <span class="nav-sep" aria-hidden="true"></span>
+    <nav class="nav nav-util" aria-label="Developer">
+      <a class="nav-link" href="/api/submission">submission.json</a>
+      <a class="nav-link" href="/docs">API</a>
+    </nav>
+
+    <div class="shell-right">
+      <button class="theme-btn" type="button" id="theme-toggle" aria-pressed="false" title="Switch between light and dark">
+        <span class="vh">Switch colour theme</span>
+        <svg class="i-moon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M13.5 9.5A6 6 0 0 1 6.5 2.5a6 6 0 1 0 7 7Z"/></svg>
+        <svg class="i-sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="3.2"/><path d="M8 .8v1.8M8 13.4v1.8M.8 8h1.8M13.4 8h1.8M2.9 2.9l1.3 1.3M11.8 11.8l1.3 1.3M13.1 2.9l-1.3 1.3M4.2 11.8l-1.3 1.3"/></svg>
+      </button>
+
+      <details class="menu">
+        <summary aria-label="Menu" title="Menu">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+        </summary>
+        <nav class="menu-panel" aria-label="All pages">
+          {{ nav_links('m') }}
+          <hr>
+          <a class="nav-link" href="/api/submission">submission.json</a>
+          <a class="nav-link" href="/docs">API reference</a>
+        </nav>
+      </details>
+    </div>
+  </div>
+</header>
+
+<main id="main">{% block content %}{% endblock %}</main>
+
+<footer>
+  Averis × Monash Hackathon 2026 · FastAPI on Cloud Run · Firestore · Cloud Storage · Gemini on Vertex AI.
+  Verifies SI/BL <strong>consistency</strong>, not document authenticity.
+</footer>
+
+<script src="/static/app.js" defer></script>
 </body>
 </html>

@@ -1,237 +1,340 @@
 {% extends "base.html" %}
 {% block title %}{{ case.email_id }}{% endblock %}
-{% macro status_pill(s) -%}
-  {%- if s == 'OK' %}<span class="status status-ok">OK — documents agree</span>
-  {%- elif s == 'MISMATCH' %}<span class="status status-mismatch">MISMATCH</span>
-  {%- elif s == 'NEEDS_REVIEW' %}<span class="status status-review">NEEDS_REVIEW · {{ case.review_reason }}</span>
-  {%- else %}<span class="status status-na">no comparison applies</span>{% endif -%}
+
+{% macro status_pill(s, long=false) -%}
+  {%- if s == 'OK' %}<span class="status status-ok"><i class="sh"></i>OK{% if long %} — documents agree{% endif %}</span>
+  {%- elif s == 'MISMATCH' %}<span class="status status-mismatch"><i class="sh"></i>MISMATCH</span>
+  {%- elif s == 'NEEDS_REVIEW' %}<span class="status status-review"><i class="sh"></i>NEEDS REVIEW{% if long and case.get('review_reason') %} · {{ case.get('review_reason')|replace('_', ' ') }}{% endif %}</span>
+  {%- else %}<span class="status status-na"><i class="sh"></i>no comparison applies</span>{% endif -%}
 {%- endmacro %}
+
 {% block content %}
-{% set em = case.email or {} %}{% set audit = case.audit or {} %}{% set review = case.review or {} %}{% set t = trace %}
+{% set em = case.get('email') or {} %}{% set audit = case.get('audit') or {} %}{% set review = case.get('review') or {} %}{% set corr = review.get('corrections') or {} %}{% set t = trace %}
+{% set cmp = case.get('comparison') or {} %}
+{% set ANOM = ('mismatched', 'unreadable', 'missing') %}
 
-<div class="row" style="justify-content:space-between">
-  <div>
-    <h1><span class="mono">{{ case.email_id }}</span> &nbsp;{{ status_pill(case.status) }}</h1>
-    <div><strong>{{ em.subject }}</strong></div>
-    <div class="soft small">from {{ em.sender }} · <span class="tag cat">{{ case.category }}</span>{% if case.status == 'MISMATCH' %} · differs in <span class="mono">{{ case.defect_fields|join(', ') }}</span>{% endif %}</div>
+{# ---- stage states drive both the rail and each card's left edge ---- #}
+{% set s3 = 'skip' if not t.validate.ran else ('warn' if t.validate.exit else 'ok') %}
+{% set s4 = 'ok' if t.extract.ran else 'skip' %}
+{% set s5 = 'skip' if not t.compare.ran else ('bad' if t.compare.counts.mismatched else ('warn' if (t.compare.counts.unreadable or t.compare.counts.missing) else 'ok')) %}
+{% set s6 = 'bad' if case.get('status') == 'MISMATCH' else ('warn' if case.get('status') == 'NEEDS_REVIEW' else ('ok' if case.get('status') == 'OK' else 'skip')) %}
+{% macro cls(state) -%}{{ {'ok':'pass','warn':'exit','bad':'fail','skip':'skipped'}[state] }}{%- endmacro %}
+
+<!-- ============================ command header ============================ -->
+<div class="case-head">
+  <div class="top">
+    <div style="min-width:0">
+      <div class="idline">{{ case.email_id }}</div>
+      <h1>{{ em.get('subject') or '(no subject)' }}</h1>
+      <div class="meta">
+        <span class="tag cat">{{ case.get('category') }}</span>
+        <span>from {{ em.get('sender') or 'unknown sender' }}</span>
+      </div>
+    </div>
+    <div class="verdict">
+      {{ status_pill(case.get('status'), true) }}
+      <div class="prevnext">
+        {% if t.prev %}<a class="btn sm ghost" href="/cases/{{ t.prev }}">← {{ t.prev }}</a>{% endif %}
+        {% if t.next %}<a class="btn sm ghost" href="/cases/{{ t.next }}">{{ t.next }} →</a>{% endif %}
+      </div>
+    </div>
   </div>
-  <div class="row small">
-    {% if t.prev %}<a href="/cases/{{ t.prev }}">← {{ t.prev }}</a>{% endif %}
-    {% if t.next %}<a href="/cases/{{ t.next }}">{{ t.next }} →</a>{% endif %}
-  </div>
-</div>
-
-{% if review.resolved_by %}
-<p class="notice" style="margin-top:12px"><strong>Human decision on record</strong> — {{ review.resolved_by }} set <span class="mono">{{ review.corrections.status if review.corrections else case.status }}</span> at {{ review.resolved_at }}{% if review.note %} — “{{ review.note }}”{% endif %}. Previously <span class="mono">{{ review.corrections.previous.status if review.corrections and review.corrections.previous else '?' }}</span>. Re-runs of the pipeline keep this decision.</p>
-{% endif %}
-
-<h2>How the system reached this conclusion</h2>
-<div class="stages">
-
-  <!-- 1 Ingest -->
-  <section class="stage">
-    <div class="num">1</div>
+  <dl class="case-facts">
     <div>
-      <h2>Ingest &amp; clean</h2>
-      <div class="sub">Quoted reply history and warning banners are stripped before any stage reads the email; the raw record is kept for audit.</div>
-      <dl class="kv">
-        <dt>Quoted history</dt><dd>{{ 'removed' if t.ingest.quoted_removed else 'none present' }}</dd>
-        <dt>Banner lines</dt><dd>{{ t.ingest.banner_lines }} removed</dd>
-        <dt>Characters dropped</dt><dd>{{ t.ingest.chars_removed }} of {{ t.ingest.raw_chars }}</dd>
-        <dt>Attachments found</dt><dd>{% if case.attachments %}{% for a in case.attachments %}<span class="mono">{{ a.filename }}</span> <span class="tag">{{ a.declared_type or '?' }} · {{ a.size_bytes }} B</span>{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd>
-      </dl>
-      <details style="margin-top:8px"><summary class="soft small">Cleaned email body</summary><pre style="margin-top:6px">{{ em.body }}</pre></details>
-      <div class="conclusion">Cleaned record ready: subject, body ({{ t.ingest.clean_chars }} chars), {{ (case.attachments or [])|length }} attachment(s) stored in Cloud Storage.</div>
+      <dt>Needs attention</dt>
+      <dd>
+        {%- if case.get('status') == 'MISMATCH' %}<span class="mono small">{{ (case.get('defect_fields') or [])|join(', ') }}</span>
+        {%- elif case.get('status') == 'NEEDS_REVIEW' %}<span class="mono small">{{ case.get('review_reason') }}</span>
+        {%- else %}<span class="faint">nothing</span>{% endif -%}
+      </dd>
     </div>
-  </section>
-
-  <!-- 2 Classify -->
-  <section class="stage">
-    <div class="num">2</div>
     <div>
-      <h2>Classify</h2>
-      <div class="sub">One Gemini call over subject + cleaned body + attachment inventory. The subject alone never decides.</div>
-      <dl class="kv">
-        <dt>Category</dt><dd><span class="tag cat">{{ case.category }}</span>{% if t.classify.confidence is not none %} <span class="soft small">confidence {{ '%.2f'|format(t.classify.confidence) }}</span>{% endif %}</dd>
-        {% if t.classify.reason %}<dt>Model's reason</dt><dd>{{ t.classify.reason }}</dd>{% endif %}
-        {% if t.classify.model %}<dt>Model</dt><dd class="mono small">{{ t.classify.model }} · prompt v{{ t.classify.prompt_version }}</dd>{% endif %}
-        {% if t.classify.error %}<dt>Error</dt><dd class="mono small">{{ t.classify.error }}</dd>{% endif %}
-      </dl>
-      <div class="conclusion">{% if case.category == 'BL_COMPARISON' %}A document-check request — continues to validation.{% else %}Not a document-check request — stages 3–5 do not apply; stage 6 records a null status.{% endif %}</div>
+      <dt>Documents</dt>
+      <dd>{{ (case.get('attachments') or [])|length }} attachment{{ '' if (case.get('attachments') or [])|length == 1 else 's' }}</dd>
     </div>
-  </section>
-
-  <!-- 3 Validate & route -->
-  <section class="stage {{ 'skipped' if not t.validate.ran else ('exit' if t.validate.exit else '') }}">
-    <div class="num">3</div>
     <div>
-      <h2>Validate &amp; route</h2>
-      <div class="sub">Real format from the file's bytes (never the extension), business document type from its content, a reader per format.</div>
-      {% if not t.validate.ran %}
-        <div class="conclusion">Did not run — only comparison requests reach this stage.</div>
-      {% else %}
-        {% if t.validate.files %}
-        <div class="scroll" style="margin-top:6px"><table>
-          <thead><tr><th>File</th><th>Declared</th><th>Read as</th><th>Verified as</th><th>Size</th></tr></thead>
-          <tbody>{% for f in t.validate.files %}
-            <tr><td class="mono">{{ f.filename }}</td><td><span class="tag">.{{ f.declared or '?' }}</span></td>
-                <td>{% if f.read_as == 'unreadable' %}<span class="status status-review">unreadable</span>{% else %}<span class="tag">{{ f.read_label }}</span>{% endif %}</td>
-                <td>{% if f.role %}<strong>{{ f.role }}</strong>{% else %}<span class="soft">—</span>{% endif %}</td><td class="num">{{ f.size }}</td></tr>
-          {% endfor %}</tbody></table></div>
-        {% else %}<p class="soft">No attachments to inspect.</p>{% endif %}
-        <div class="conclusion">{{ t.validate.conclusion }}</div>
-      {% endif %}
+      <dt>Comparison</dt>
+      <dd>{% if cmp %}{{ t.compare.counts.matched + t.compare.counts.matched_after_normalisation }} of 7 agreed{% else %}<span class="faint">not run</span>{% endif %}</dd>
     </div>
-  </section>
-
-  <!-- Source documents (read from Cloud Storage, exactly as stored) -->
-  {% if sources %}
-  <section class="stage src">
-    <div class="num">≡</div>
     <div>
-      <h2>Source documents <span class="soft" style="font-weight:400;font-size:13px">— as stored, read from Cloud Storage</span></h2>
-      <div class="sub">Plain-text files are shown verbatim; <mark>non-Latin text is highlighted</mark>. Binary files are not decoded here — Stage 3 says how each was read.</div>
-      {% for src in sources %}
-      <details {% if src.non_latin %}open{% endif %} style="margin-top:6px">
-        <summary class="mono" style="cursor:pointer">{{ src.filename }}{% if src.note %} <span class="soft small">— {{ src.note }}</span>{% endif %}{% if src.non_latin %} <span class="tag">non-Latin text</span>{% endif %}</summary>
-        {% if src.html %}<div class="scroll" style="margin-top:6px"><pre class="src-text">{{ src.html|safe }}</pre></div>{% endif %}
-      </details>
-      {% endfor %}
+      <dt>Decided by</dt>
+      <dd>{% if review.get('resolved_by') %}<strong>{{ review.get('resolved_by') }}</strong> (human){% else %}the pipeline{% endif %}</dd>
     </div>
-  </section>
-  {% endif %}
-
-  <!-- 4 Extract -->
-  <section class="stage {{ '' if t.extract.ran else 'skipped' }}">
-    <div class="num">4</div>
-    <div>
-      <h2>Extract</h2>
-      <div class="sub">The seven compared fields out of each document, label mapped to the canonical name in any language, verbatim text kept as evidence.</div>
-      {% if not t.extract.ran %}
-        <div class="conclusion">Did not run — {{ t.extract.why }}</div>
-      {% else %}
-      <div class="scroll" style="margin-top:6px"><table class="compare">
-        <thead><tr><th>Field</th><th>Shipping Instruction (source of truth)</th><th>Draft Bill of Lading</th></tr></thead>
-        <tbody>
-        {% for f in fields %}{% set s = (case.si or {}).get(f) or {} %}{% set b = (case.bl or {}).get(f) or {} %}
-          <tr class="row-{{ (case.comparison or {}).get(f, '') }}">
-            <td class="field">{{ f }}</td>
-            {% for side in (s, b) %}
-            <td>
-              <div class="val">{{ side.value if side.value is not none else '—' }}</div>
-              {% if side.original_text %}<div class="orig">“{{ side.original_text }}”</div>{% endif %}
-              <div class="meta">{{ side.source or '' }}{% if side.method %} · {{ side.method }}{% endif %}{% if side.confidence is not none %} · conf {{ '%.2f'|format(side.confidence) }}{% endif %}</div>
-            </td>
-            {% endfor %}
-          </tr>
-        {% endfor %}
-        </tbody></table></div>
-      <div class="conclusion">{{ t.extract.conclusion }}</div>
-      {% endif %}
-    </div>
-  </section>
-
-  <!-- 5 Compare -->
-  <section class="stage {{ '' if t.compare.ran else 'skipped' }}">
-    <div class="num">5</div>
-    <div>
-      <h2>Normalise &amp; compare</h2>
-      <div class="sub">Deterministic, no model: legal suffixes and addresses stripped from parties, ports resolved to UN/LOCODE, weights to kg. <span class="reason reason-matched_after_normalisation">matched after normalisation</span> marks a match the normaliser earned.</div>
-      {% if not t.compare.ran %}
-        <div class="conclusion">Did not run — {{ t.compare.why }}</div>
-      {% else %}
-      <div class="scroll" style="margin-top:6px"><table>
-        <thead><tr><th>Field</th><th>Outcome</th><th>SI</th><th>BL</th></tr></thead>
-        <tbody>
-        {% for f in fields %}{% set r = (case.comparison or {}).get(f) %}
-          <tr><td class="mono">{{ f }}</td><td><span class="reason reason-{{ r }}">{{ (r or '—')|replace('_', ' ') }}</span></td>
-              <td class="mono small">{{ ((case.si or {}).get(f) or {}).get('value') if ((case.si or {}).get(f) or {}).get('value') is not none else '—' }}</td>
-              <td class="mono small">{{ ((case.bl or {}).get(f) or {}).get('value') if ((case.bl or {}).get(f) or {}).get('value') is not none else '—' }}</td></tr>
-        {% endfor %}
-        </tbody></table></div>
-      <div class="conclusion">{{ t.compare.conclusion }} <span class="soft small">rules v{{ audit.rule_version }}</span></div>
-      {% endif %}
-    </div>
-  </section>
-
-  <!-- 6 Decide -->
-  <section class="stage {{ 'exit' if case.status == 'NEEDS_REVIEW' else ('fail' if case.status == 'MISMATCH' else '') }}">
-    <div class="num">6</div>
-    <div>
-      <h2>Decide</h2>
-      <div class="sub">A confident mismatch beats partial uncertainty; escalation only when genuinely undecidable. Deterministic and idempotent.</div>
-      <dl class="kv">
-        <dt>Status</dt><dd>{{ status_pill(case.status) }}</dd>
-        {% if case.status == 'MISMATCH' %}<dt>Defect fields</dt><dd class="mono">{{ case.defect_fields|join(', ') }}</dd>{% endif %}
-        {% if audit.undecided_fields %}<dt>Undecided fields</dt><dd class="mono">{{ audit.undecided_fields|join(', ') }}</dd>{% endif %}
-        {% if audit.decision_note %}<dt>Note</dt><dd>{{ t.decide.note_label }} <span class="mono soft small">({{ audit.decision_note }})</span></dd>{% endif %}
-      </dl>
-      <div class="conclusion">{{ t.decide.conclusion }}</div>
-    </div>
-  </section>
-</div>
-
-<h2>Audit record</h2>
-<div class="audit">
-  <h2>Every decision traces to immutable files and a versioned rule set</h2>
-  <dl class="kv">
-    {% for a in (case.attachments or []) %}
-      <dt>sha256 · {{ a.filename }}</dt><dd><span class="hash">{{ a.sha256 }}</span><br><span class="soft small">{{ a.gcs_uri }}</span></dd>
-    {% endfor %}
-    {% if not case.attachments %}<dt>Files</dt><dd>none</dd>{% endif %}
-    <dt>Readers used</dt><dd>{% if audit.readers_used %}{% for k, v in audit.readers_used.items() %}{{ k }} → {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}—{% endif %}</dd>
-    <dt>Stage-3 exit</dt><dd>{{ audit.stage3_exit or '—' }}</dd>
-    <dt>Compare rules</dt><dd>v{{ audit.rule_version or '—' }}</dd>
-    <dt>Decision rule</dt><dd>v{{ audit.decision_version or '—' }}</dd>
-    <dt>Classifier</dt><dd>{{ t.classify.model or '—' }} · prompt v{{ t.classify.prompt_version or '—' }}</dd>
-    <dt>Ingested</dt><dd>{{ audit.ingested_at or '—' }}</dd>
-    <dt>Classified</dt><dd>{{ audit.classified_at or '—' }}</dd>
-    <dt>Extracted</dt><dd>{{ audit.extracted_at or '—' }}</dd>
-    <dt>Decided</dt><dd>{{ audit.decided_at or '—' }}</dd>
-    {% if audit.error %}<dt>Pipeline error</dt><dd>{{ audit.error }}</dd>{% endif %}
   </dl>
 </div>
 
+{% if review.get('resolved_by') %}
+<p class="notice info" style="margin-top:16px">
+  <strong>Human decision on record.</strong>
+  {{ review.get('resolved_by') }} set <span class="mono">{{ corr.get('status') or case.get('status') }}</span>
+  {% if review.get('resolved_at') %}at <time datetime="{{ review.get('resolved_at') }}">{{ review.get('resolved_at')[:19] }}Z</time>{% endif %}
+  {%- if review.get('note') %} — “{{ review.get('note') }}”{% endif %}.
+  Previously <span class="mono">{{ (corr.get('previous') or {}).get('status') or '?' }}</span>.
+  Re-running the pipeline keeps this decision.
+</p>
+{% endif %}
+
+<!-- ============================ trace rail ============================ -->
+<nav class="trace-rail" aria-label="Pipeline stages">
+  <a href="#stage-1" class="s-ok"><i class="sh"></i><span class="n">1</span> Ingest</a>
+  <a href="#stage-2" class="{{ 's-bad' if t.classify.get('error') else 's-ok' }}"><i class="sh"></i><span class="n">2</span> Classify</a>
+  <a href="#stage-3" class="s-{{ s3 }}"><i class="sh"></i><span class="n">3</span> Validate</a>
+  <a href="#stage-4" class="s-{{ s4 }}"><i class="sh"></i><span class="n">4</span> Extract</a>
+  <a href="#stage-5" class="s-{{ s5 }}"><i class="sh"></i><span class="n">5</span> Compare</a>
+  <a href="#stage-6" class="s-{{ s6 }}"><i class="sh"></i><span class="n">6</span> Decide</a>
+  <a href="#decision" class="s-skip"><i class="sh"></i>Your decision</a>
+</nav>
+
+<!-- ============================ 6 · decide (first: the verdict) ============================ -->
+<section class="stage {{ cls(s6) }}" id="stage-6">
+  <div class="stage-head"><span class="n">STAGE 6</span><h2>Decide, evidence &amp; audit</h2></div>
+  <p class="sub">A confident mismatch beats partial uncertainty; escalation only where the case is genuinely undecidable. Deterministic and idempotent — re-running gives the same answer.</p>
+  <dl class="kv">
+    <dt>Status</dt><dd>{{ status_pill(case.get('status')) }}</dd>
+    {% if case.get('status') == 'MISMATCH' %}<dt>Fields that differ</dt><dd class="mono">{{ (case.get('defect_fields') or [])|join(', ') }}</dd>{% endif %}
+    {% if audit.get('undecided_fields') %}<dt>Undecided</dt><dd class="mono">{{ (audit.get('undecided_fields') or [])|join(', ') }}</dd>{% endif %}
+    {% if audit.get('decision_note') %}<dt>Note</dt><dd>{{ t.decide.note_label }} <span class="mono faint xs">({{ audit.get('decision_note') }})</span></dd>{% endif %}
+  </dl>
+  <div class="conclusion">{{ t.decide.conclusion }}</div>
+</section>
+
+<!-- ============================ 5 · compare ============================ -->
+<section class="stage {{ cls(s5) }}" id="stage-5">
+  <div class="stage-head"><span class="n">STAGE 5</span><h2>Normalise &amp; compare</h2></div>
+  <p class="sub">Deterministic, no model: legal suffixes and addresses stripped from party names, ports resolved to UN/LOCODE, weights converted to kg. Language alone never produces a mismatch.</p>
+  {% if not t.compare.ran %}
+    <div class="conclusion">Did not run — {{ t.compare.why }}</div>
+  {% else %}
+    {% if t.extract.ran %}
+    {% macro ev_row(f) %}
+      {% set r = cmp.get(f) %}{% set s = (case.get('si') or {}).get(f) or {} %}{% set b = (case.get('bl') or {}).get(f) or {} %}
+      <tr class="r-{{ r }}">
+        <th scope="row" class="field">{{ f }}</th>
+        <td><span class="reason reason-{{ r }}">{{ (r or '—')|replace('_', ' ') }}</span></td>
+        <td>
+          <div class="val">{{ s.value if s.value is not none else '—' }}</div>
+          {% if s.original_text %}<div class="orig">“{{ s.original_text }}”</div>{% endif %}
+          {% if s.source or s.method or s.confidence is not none %}
+            <div class="metaline">{{ s.source or '' }}{% if s.method %} · {{ s.method }}{% endif %}{% if s.confidence is not none %} · conf {{ '%.2f'|format(s.confidence) }}{% endif %}</div>
+          {% endif %}
+        </td>
+        <td>
+          <div class="val">{{ b.value if b.value is not none else '—' }}</div>
+          {% if b.original_text %}<div class="orig">“{{ b.original_text }}”</div>{% endif %}
+          {% if b.source or b.method or b.confidence is not none %}
+            <div class="metaline">{{ b.source or '' }}{% if b.method %} · {{ b.method }}{% endif %}{% if b.confidence is not none %} · conf {{ '%.2f'|format(b.confidence) }}{% endif %}</div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endmacro %}
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Field evidence, scrollable">
+      <table class="evidence">
+        <caption>Every compared field with the verbatim text it was read from. The Shipping Instruction is the source of truth; fields needing attention are listed first.</caption>
+        <thead><tr>
+          <th scope="col">Field</th><th scope="col">Outcome</th>
+          <th scope="col" class="si">Shipping Instruction · source of truth</th>
+          <th scope="col">Draft Bill of Lading</th>
+        </tr></thead>
+        <tbody>
+          {% for f in fields if cmp.get(f) in ANOM %}{{ ev_row(f) }}{% endfor %}
+          {% for f in fields if cmp.get(f) not in ANOM %}{{ ev_row(f) }}{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    <div class="conclusion">{{ t.compare.conclusion }} <span class="faint small">rules v{{ audit.get('rule_version') }}</span></div>
+  {% endif %}
+</section>
+
+<!-- ============================ 4 · extract ============================ -->
+<section class="stage {{ cls(s4) }}" id="stage-4">
+  <div class="stage-head"><span class="n">STAGE 4</span><h2>Extract</h2></div>
+  <p class="sub">The seven compared fields out of each document, labels mapped to the canonical name in any language, verbatim text kept as evidence.</p>
+  {% if not t.extract.ran %}
+    <div class="conclusion">Did not run — {{ t.extract.why }}</div>
+  {% else %}
+    <div class="conclusion">{{ t.extract.conclusion }} Each value and its source text is shown in the evidence table under stage 5.</div>
+  {% endif %}
+</section>
+
+<!-- ============================ 3 · validate ============================ -->
+<section class="stage {{ cls(s3) }}" id="stage-3">
+  <div class="stage-head"><span class="n">STAGE 3</span><h2>Validate &amp; route</h2></div>
+  <p class="sub">Real format from the file's bytes, never the extension. Business document type from the content. One reader per format; unusable cases exit here before extraction cost is spent.</p>
+  {% if not t.validate.ran %}
+    <div class="conclusion">Did not run — only document-comparison requests reach this stage.</div>
+  {% else %}
+    {% if t.validate.files %}
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Attachment routing, scrollable">
+      <table>
+        <caption>How each attachment was identified and read.</caption>
+        <thead><tr><th scope="col">File</th><th scope="col">Declared</th><th scope="col">Read as</th><th scope="col">Verified as</th><th scope="col" class="num">Size</th></tr></thead>
+        <tbody>
+          {% for f in t.validate.files %}
+          <tr>
+            <th scope="row" class="mono small" style="font-weight:400">{{ f.filename }}</th>
+            <td><span class="tag">.{{ f.declared or '?' }}</span></td>
+            <td>{% if f.read_as == 'unreadable' %}<span class="status status-review"><i class="sh"></i>unreadable</span>{% else %}<span class="tag">{{ f.read_label }}</span>{% endif %}</td>
+            <td>{% if f.role %}<strong>{{ f.role }}</strong>{% else %}<span class="faint">—</span>{% endif %}</td>
+            <td class="num">{{ f.size }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<p class="soft">No attachments to inspect.</p>{% endif %}
+    <div class="conclusion">{{ t.validate.conclusion }}</div>
+  {% endif %}
+
+  {% if sources %}
+  <details class="box" {% if case.get('status') in ('MISMATCH', 'NEEDS_REVIEW') %}open{% endif %}>
+    <summary>Source documents — as stored in Cloud Storage{% if sources|selectattr('non_latin')|list %} · contains non-Latin text{% endif %}</summary>
+    <div class="body">
+      <p class="hint">Plain-text files are shown verbatim; <mark>non-Latin text is highlighted</mark>. Binary files are not decoded here — the table above says how each was read.</p>
+      {% for src in sources %}
+      <details class="box" {% if src.get('non_latin') %}open{% endif %}>
+        <summary><span class="mono">{{ src.filename }}</span>{% if src.get('note') %} <span class="faint small">— {{ src.get('note') }}</span>{% endif %}</summary>
+        {% if src.get('html') %}<div class="body"><pre class="src-text">{{ src.get('html')|safe }}</pre></div>{% endif %}
+      </details>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+<!-- ============================ 2 · classify ============================ -->
+<section class="stage {{ 'fail' if t.classify.get('error') else 'pass' }}" id="stage-2">
+  <div class="stage-head"><span class="n">STAGE 2</span><h2>Classify</h2></div>
+  <p class="sub">One Gemini call over subject + cleaned body + attachment inventory together. The subject alone never decides — subjects in this data are frequently stale or reused.</p>
+  <dl class="kv">
+    <dt>Category</dt>
+    <dd><span class="tag cat">{{ case.get('category') }}</span>{% if t.classify.get('confidence') is not none %} <span class="faint small">confidence {{ '%.2f'|format(t.classify.get('confidence')) }}</span>{% endif %}</dd>
+    {% if t.classify.get('reason') %}<dt>Model's reason</dt><dd>{{ t.classify.get('reason') }}</dd>{% endif %}
+    {% if t.classify.get('error') %}<dt>Error</dt><dd class="mono small err">{{ t.classify.get('error') }}</dd>{% endif %}
+  </dl>
+  <div class="conclusion">{% if case.get('category') == 'BL_COMPARISON' %}A document-check request — continues to validation.{% else %}Not a document-check request — stages 3–5 do not apply and stage 6 records a null status.{% endif %}</div>
+</section>
+
+<!-- ============================ 1 · ingest ============================ -->
+<section class="stage pass" id="stage-1">
+  <div class="stage-head"><span class="n">STAGE 1</span><h2>Ingest &amp; clean</h2></div>
+  <p class="sub">Quoted reply history and warning banners are stripped before any stage reads the email; the raw record is kept for audit.</p>
+  <dl class="kv">
+    <dt>Quoted history</dt><dd>{{ 'removed' if t.ingest.quoted_removed else 'none present' }}</dd>
+    <dt>Banner lines</dt><dd>{{ t.ingest.banner_lines }} removed</dd>
+    <dt>Characters dropped</dt><dd>{{ t.ingest.chars_removed }} of {{ t.ingest.raw_chars }}</dd>
+    <dt>Attachments</dt>
+    <dd>{% if case.get('attachments') %}{% for a in case.get('attachments') %}<span class="mono">{{ a.filename }}</span> <span class="tag">{{ a.get('declared_type') or '?' }} · {{ a.get('size_bytes') }} B</span>{% if not loop.last %} {% endif %}{% endfor %}{% else %}none{% endif %}</dd>
+  </dl>
+  <details class="box"><summary>Cleaned email body</summary><div class="body"><pre>{{ em.get('body') }}</pre></div></details>
+  <div class="conclusion">Cleaned record ready: subject, body ({{ t.ingest.clean_chars }} chars), {{ (case.get('attachments') or [])|length }} attachment(s) stored in Cloud Storage.</div>
+</section>
+
+<!-- ============================ audit ============================ -->
+<details class="box" id="audit">
+  <summary><strong>Audit evidence</strong> — file hashes, storage URIs, rule versions and timings</summary>
+  <div class="body">
+    <p class="hint">Every decision traces to immutable files and a versioned rule set.</p>
+    <dl class="kv">
+      {% for a in (case.get('attachments') or []) %}
+        <dt>sha256 · {{ a.filename }}</dt>
+        <dd>
+          <span class="hash">{{ a.get('sha256') }}</span>
+          <button class="copy" type="button" data-copy="{{ a.get('sha256') }}">Copy</button>
+          <br><span class="faint xs">{{ a.get('gcs_uri') }}</span>
+        </dd>
+      {% endfor %}
+      {% if not case.get('attachments') %}<dt>Files</dt><dd>none</dd>{% endif %}
+      <dt>Readers used</dt><dd class="mono small">{% if audit.get('readers_used') %}{% for k, v in audit.get('readers_used').items() %}{{ k }} → {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}—{% endif %}</dd>
+      <dt>Stage-3 exit</dt><dd class="mono small">{{ audit.get('stage3_exit') or '—' }}</dd>
+      <dt>Compare rules</dt><dd class="mono small">v{{ audit.get('rule_version') or '—' }}</dd>
+      <dt>Decision rule</dt><dd class="mono small">v{{ audit.get('decision_version') or '—' }}</dd>
+      <dt>Classifier</dt><dd class="mono small">{{ t.classify.get('model') or '—' }} · prompt v{{ t.classify.get('prompt_version') or '—' }}</dd>
+      <dt>Ingested</dt><dd class="mono small">{% if audit.get('ingested_at') %}<time datetime="{{ audit.get('ingested_at') }}">{{ audit.get('ingested_at')[:19] }}Z</time>{% else %}—{% endif %}</dd>
+      <dt>Classified</dt><dd class="mono small">{% if audit.get('classified_at') %}<time datetime="{{ audit.get('classified_at') }}">{{ audit.get('classified_at')[:19] }}Z</time>{% else %}—{% endif %}</dd>
+      <dt>Extracted</dt><dd class="mono small">{% if audit.get('extracted_at') %}<time datetime="{{ audit.get('extracted_at') }}">{{ audit.get('extracted_at')[:19] }}Z</time>{% else %}—{% endif %}</dd>
+      <dt>Decided</dt><dd class="mono small">{% if audit.get('decided_at') %}<time datetime="{{ audit.get('decided_at') }}">{{ audit.get('decided_at')[:19] }}Z</time>{% else %}—{% endif %}</dd>
+      {% if audit.get('error') %}<dt>Pipeline error</dt><dd class="err small">{{ audit.get('error') }}</dd>{% endif %}
+    </dl>
+  </div>
+</details>
+
+<!-- ============================ decision ============================ -->
 {% macro correction_form() %}
-<form class="correct" method="post" action="/review/{{ case.email_id }}">
+<form class="correct" method="post" action="/review/{{ case.email_id }}" data-decide-form>
   <fieldset>
     <legend>Status</legend>
-    <label class="opt"><input type="radio" name="status" value="OK" {% if case.status == 'OK' %}checked{% endif %}> OK — documents agree</label>
-    <label class="opt"><input type="radio" name="status" value="MISMATCH" {% if case.status == 'MISMATCH' %}checked{% endif %}> MISMATCH — fields below differ</label>
-    <label class="opt"><input type="radio" name="status" value="NEEDS_REVIEW" {% if case.status == 'NEEDS_REVIEW' %}checked{% endif %}> Still needs review</label>
+    <div class="opts">
+      <label class="opt"><input type="radio" name="status" value="OK" {% if case.get('status') == 'OK' %}checked{% endif %} data-status> <span>OK — the documents agree</span></label>
+      <label class="opt"><input type="radio" name="status" value="MISMATCH" {% if case.get('status') == 'MISMATCH' %}checked{% endif %} data-status> <span>MISMATCH — the fields ticked below differ</span></label>
+      <label class="opt"><input type="radio" name="status" value="NEEDS_REVIEW" {% if case.get('status') == 'NEEDS_REVIEW' %}checked{% endif %} data-status> <span>Still needs review</span></label>
+    </div>
   </fieldset>
-  <fieldset>
-    <legend>Fields that differ (for MISMATCH)</legend>
-    {% for f in fields %}<label class="opt"><input type="checkbox" name="defect_fields" value="{{ f }}" {% if f in (case.defect_fields or []) %}checked{% endif %}> <span class="mono">{{ f }}</span></label>{% endfor %}
+
+  <fieldset data-defects>
+    <legend>Fields that differ</legend>
+    <p class="hint" style="margin:0 0 8px">Only used when the status is MISMATCH. At least one field is required in that case.</p>
+    <div class="opts cols">
+      {% for f in fields %}
+        <label class="opt"><input type="checkbox" name="defect_fields" value="{{ f }}" {% if f in (case.get('defect_fields') or []) %}checked{% endif %}> <span class="mono small">{{ f }}</span></label>
+      {% endfor %}
+    </div>
+    <p class="err" data-defect-error hidden>Choose at least one field that differs, or pick a different status.</p>
   </fieldset>
+
   <div class="inputs">
-    <label>Reviewer<input type="text" name="resolved_by" placeholder="your name" required></label>
-    <label>Note (optional)<input type="text" name="note" placeholder="e.g. weight on BL is a typo, confirmed with the line"></label>
+    <label>Reviewer <span class="faint">(required)</span>
+      <input type="text" name="resolved_by" placeholder="your name" required autocomplete="name"></label>
+    <label>Note <span class="faint">(optional)</span>
+      <input type="text" name="note" placeholder="e.g. weight on the BL is a typo, confirmed with the line"></label>
   </div>
-  <p><button type="submit">Save decision</button> <span class="soft small">— writes to Firestore; submission.json and the queue update immediately.</span></p>
+
+  <div class="confirm" data-confirm hidden>
+    <h4>Confirm this decision</h4>
+    <dl class="kv" data-confirm-body></dl>
+    <p class="hint" style="margin:12px 0 0">This writes to Firestore, updates <span class="mono">submission.json</span>, and survives every later pipeline run.</p>
+  </div>
+
+  <div class="row">
+    <button class="btn primary" type="submit" data-submit>Save decision</button>
+    <span class="hint" data-submit-hint>Writes to Firestore; the queue and submission.json update immediately.</span>
+  </div>
 </form>
 {% endmacro %}
 
-{% if form_mode == 'open' %}
-<h2>Your decision</h2>
-<p class="soft small" style="margin-top:-4px">This case was escalated because the system could not decide it. Your decision replaces the automatic one and survives re-runs.</p>
-{{ correction_form() }}
-{% elif form_mode == 'override' %}
-<h2>Decision</h2>
-<div class="card">
-  <div class="row"><strong>Decided automatically</strong> {{ status_pill(case.status) }}</div>
-  <p class="soft" style="margin:8px 0 0">{{ t.decide.conclusion }} <span class="small">Compare rules v{{ audit.rule_version or '—' }} · decision rule v{{ audit.decision_version or '—' }}{% if audit.decided_at %} · {{ audit.decided_at[:19] }}Z{% endif %}.</span></p>
-  <details style="margin-top:12px">
-    <summary class="soft" style="cursor:pointer">Override this decision</summary>
-    <p class="notice small" style="margin:10px 0">An override is a human decision: it is written to Firestore, changes <span class="mono">submission.json</span>, and is kept across every re-run of the pipeline until explicitly reset.</p>
-    {{ correction_form() }}
-  </details>
-</div>
-{% else %}
-<h2>Decision</h2>
-<div class="card">
-  <div class="row"><strong>Decided automatically</strong> {{ status_pill(case.status) }}</div>
-  <p class="soft" style="margin:8px 0 0">{{ t.decide.conclusion }} Nothing to review or override for a non-comparison email.</p>
-</div>
-{% endif %}
+<section class="section" id="decision">
+  <h2>{{ 'Your decision' if form_mode == 'open' else 'Decision' }}</h2>
+  {% if form_mode == 'open' %}
+    <p class="section-note">This case was escalated because the system could not decide it. Your decision replaces the automatic one and survives re-runs.</p>
+    <div class="decide-panel">{{ correction_form() }}</div>
+  {% elif form_mode == 'override' %}
+    <div class="decide-panel">
+      <div class="current">
+        <div class="row" style="justify-content:space-between">
+          <strong>Decided automatically</strong>
+          {{ status_pill(case.get('status')) }}
+        </div>
+        <p class="soft" style="margin:10px 0 0">{{ t.decide.conclusion }}</p>
+        <p class="hint" style="margin:6px 0 0">Compare rules v{{ audit.get('rule_version') or '—' }} · decision rule v{{ audit.get('decision_version') or '—' }}{% if audit.get('decided_at') %} · {{ audit.get('decided_at')[:19] }}Z{% endif %}</p>
+      </div>
+      <details class="box">
+        <summary>Edit human decision — override the automatic verdict</summary>
+        <div class="body">
+          <p class="notice small">An override is a human decision: it is written to Firestore, changes <span class="mono">submission.json</span>, and is kept across every re-run of the pipeline until explicitly reset.</p>
+          {{ correction_form() }}
+        </div>
+      </details>
+    </div>
+  {% else %}
+    <div class="decide-panel">
+      <div class="current">
+        <div class="row" style="justify-content:space-between">
+          <strong>Decided automatically</strong>
+          {{ status_pill(case.get('status')) }}
+        </div>
+        <p class="soft" style="margin:10px 0 0">{{ t.decide.conclusion }} There is nothing to review or override for a non-comparison email.</p>
+      </div>
+    </div>
+  {% endif %}
+</section>
 {% endblock %}

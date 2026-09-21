@@ -1,62 +1,144 @@
 {% extends "base.html" %}
 {% block title %}Cases{% endblock %}
 {% macro status_pill(s) -%}
-  {%- if s == 'OK' %}<span class="status status-ok">OK</span>
-  {%- elif s == 'MISMATCH' %}<span class="status status-mismatch">MISMATCH</span>
-  {%- elif s == 'NEEDS_REVIEW' %}<span class="status status-review">NEEDS_REVIEW</span>
-  {%- else %}<span class="status status-na">n/a</span>{% endif -%}
+  {%- if s == 'OK' %}<span class="status status-ok"><i class="sh"></i>OK</span>
+  {%- elif s == 'MISMATCH' %}<span class="status status-mismatch"><i class="sh"></i>MISMATCH</span>
+  {%- elif s == 'NEEDS_REVIEW' %}<span class="status status-review"><i class="sh"></i>NEEDS_REVIEW</span>
+  {%- else %}<span class="status status-na"><i class="sh"></i>n/a</span>{% endif -%}
+{%- endmacro %}
+{% macro edge(s) -%}
+  {%- if s == 'OK' %}edge-ok{% elif s == 'MISMATCH' %}edge-mismatch{% elif s == 'NEEDS_REVIEW' %}edge-review{% else %}edge{% endif -%}
 {%- endmacro %}
 {% block content %}
-<h1>Cases <span class="soft" style="font-weight:400">— {{ rows|length }} of {{ total }}</span></h1>
+{% set active = (f.status or f.category or f.reason or f.q) %}
 
-<form class="filters card" method="get" action="/cases" style="margin:12px 0 14px">
-  <label>Status
-    <select name="status">
-      <option value="">any</option>
-      {% for s in ('OK', 'MISMATCH', 'NEEDS_REVIEW', 'null') %}<option value="{{ s }}" {% if f.status == s %}selected{% endif %}>{{ 'not applicable (null)' if s == 'null' else s }}</option>{% endfor %}
-    </select></label>
-  <label>Category
-    <select name="category">
-      <option value="">any</option>
-      {% for c in categories %}<option value="{{ c }}" {% if f.category == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
-    </select></label>
-  <label>Review reason
-    <select name="reason">
-      <option value="">any</option>
-      {% for r in reasons %}<option value="{{ r }}" {% if f.reason == r %}selected{% endif %}>{{ r }}</option>{% endfor %}
-    </select></label>
-  <button type="submit">Filter</button>
-  <a class="btn secondary" href="/cases">Clear</a>
-  <label style="margin-left:auto">Jump to email_id
-    <span class="row" style="gap:6px"><input class="mono" type="text" name="q" placeholder="email_512" value="{{ f.q or '' }}" size="12"><button type="submit">Go</button></span></label>
-</form>
+<div class="page-head">
+  <div class="grow">
+    <p class="eyebrow">Operations</p>
+    <h1>Record explorer</h1>
+    <p class="lede">Every processed email and the verdict the pipeline reached. Filters run on the server; search, sorting and paging refine what is already on this page.</p>
+  </div>
+  <div class="head-actions">
+    <span class="count-note"><strong class="mono">{{ rows|length }}</strong> of <span class="mono">{{ total }}</span> cases</span>
+  </div>
+</div>
 
-{% if not_found %}<p class="notice">No case <span class="mono">{{ not_found }}</span> in this dataset.</p>{% endif %}
+<div class="toolbar">
+  <form method="get" action="/cases" role="search" aria-label="Filter cases">
+    <label class="field">
+      <span>Status</span>
+      <select name="status">
+        <option value="">Any status</option>
+        {% for s in ('OK', 'MISMATCH', 'NEEDS_REVIEW', 'null') %}
+          <option value="{{ s }}" {% if f.status == s %}selected{% endif %}>{{ 'Not applicable' if s == 'null' else s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Category</span>
+      <select name="category">
+        <option value="">Any category</option>
+        {% for c in categories %}<option value="{{ c }}" {% if f.category == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Review reason</span>
+      <select name="reason">
+        <option value="">Any reason</option>
+        {% for r in reasons %}<option value="{{ r }}" {% if f.reason == r %}selected{% endif %}>{{ r|replace('_', ' ')|capitalize }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" type="submit">Apply filters</button>
+    {% if active %}<a class="btn ghost" href="/cases">Clear all</a>{% endif %}
+
+    <label class="field pushright">
+      <span>Jump to exact email ID</span>
+      <span class="row" style="gap:6px">
+        <input class="mono" type="text" name="q" placeholder="email_512" value="{{ f.q or '' }}" size="14" autocomplete="off">
+        <button class="btn" type="submit">Go</button>
+      </span>
+    </label>
+  </form>
+
+  {% if active %}
+  <div class="chips">
+    <span class="xs faint">Active:</span>
+    {% if f.status %}<a class="chip" href="/cases?{% if f.category %}category={{ f.category }}&amp;{% endif %}{% if f.reason %}reason={{ f.reason }}{% endif %}">status <b>{{ 'not applicable' if f.status == 'null' else f.status }}</b> ✕</a>{% endif %}
+    {% if f.category %}<a class="chip" href="/cases?{% if f.status %}status={{ f.status }}&amp;{% endif %}{% if f.reason %}reason={{ f.reason }}{% endif %}">category <b>{{ f.category }}</b> ✕</a>{% endif %}
+    {% if f.reason %}<a class="chip" href="/cases?{% if f.status %}status={{ f.status }}&amp;{% endif %}{% if f.category %}category={{ f.category }}{% endif %}">reason <b>{{ f.reason }}</b> ✕</a>{% endif %}
+    {% if f.q %}<a class="chip" href="/cases">id <b>{{ f.q }}</b> ✕</a>{% endif %}
+  </div>
+  {% endif %}
+
+  {# revealed by app.js — a dead control would be worse than none without JS #}
+  <div class="chips" id="client-tools" hidden>
+    <label class="field" style="flex-direction:row; align-items:center; gap:8px">
+      <span>Search visible results</span>
+      <input type="search" id="client-search" placeholder="id, subject, sender…" autocomplete="off" size="22">
+    </label>
+    <label class="field" style="flex-direction:row; align-items:center; gap:8px">
+      <span>Rows</span>
+      <select id="page-size"><option>25</option><option selected>50</option><option>100</option></select>
+    </label>
+    <label class="field" style="flex-direction:row; align-items:center; gap:8px">
+      <span>Density</span>
+      <select id="density"><option value="comfortable">Comfortable</option><option value="dense">Compact</option></select>
+    </label>
+    <span class="count-note" id="client-count" role="status" aria-live="polite"></span>
+  </div>
+</div>
+
+{% if not_found %}
+  <p class="notice" style="margin-bottom:16px">No case with the exact ID <span class="mono">{{ not_found }}</span> exists in this dataset. The filters below still apply.</p>
+{% endif %}
 
 {% if not rows %}
-  <div class="empty">No cases match these filters.</div>
+  <div class="empty">
+    <div class="big">No cases match these filters</div>
+    <p>Try a different status, category or reason.</p>
+    <p style="margin:0"><a class="btn ghost" href="/cases">Clear all filters</a></p>
+  </div>
 {% else %}
-<div class="scroll">
-<table>
-  <thead><tr><th>Email</th><th>Category</th><th>Status</th><th>Reason / defects</th><th>Subject</th><th>From</th></tr></thead>
-  <tbody>
-  {% for c in rows %}
-    <tr>
-      <td><a class="mono" href="/cases/{{ c.email_id }}">{{ c.email_id }}</a></td>
-      <td><span class="tag cat">{{ c.category }}</span></td>
-      <td>{{ status_pill(c.status) }}</td>
-      <td class="mono small">
-        {%- if c.status == 'MISMATCH' %}{{ c.defect_fields|join(', ') }}
-        {%- elif c.status == 'NEEDS_REVIEW' %}{{ c.review_reason }}
-        {%- elif (c.audit or {}).get('decision_note') == 'no_documents_to_compare' %}<span class="soft">no documents to compare</span>
-        {%- else %}<span class="soft">—</span>{% endif -%}
-      </td>
-      <td>{{ (c.email or {}).get('subject', '') }}</td>
-      <td class="soft small">{{ (c.email or {}).get('sender', '') }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Cases table, scrollable">
+  <table id="cases-table">
+    <caption>{{ rows|length }} case{{ '' if rows|length == 1 else 's' }} matching the current server filters, of {{ total }} processed.</caption>
+    <thead>
+      <tr>
+        <th scope="col" data-key="id">Email ID</th>
+        <th scope="col" data-key="category">Category</th>
+        <th scope="col" data-key="status">Status</th>
+        <th scope="col" data-key="detail">Reason / defects</th>
+        <th scope="col" data-key="subject">Subject</th>
+        <th scope="col" data-key="sender">From</th>
+        <th scope="col"><span class="vh">Action</span></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in rows %}
+      {% set em = c.get('email') or {} %}
+      <tr class="{{ edge(c.get('status')) }}">
+        <td><a class="mono" href="/cases/{{ c.email_id }}">{{ c.email_id }}</a></td>
+        <td><span class="tag cat">{{ c.get('category') }}</span></td>
+        <td>{{ status_pill(c.get('status')) }}</td>
+        <td class="small">
+          {%- if c.get('status') == 'MISMATCH' %}<span class="mono">{{ (c.get('defect_fields') or [])|join(', ') }}</span>
+          {%- elif c.get('status') == 'NEEDS_REVIEW' %}<span class="mono">{{ c.get('review_reason') }}</span>
+          {%- elif (c.get('audit') or {}).get('decision_note') == 'no_documents_to_compare' %}<span class="soft">no documents to compare</span>
+          {%- else %}<span class="faint">—</span>{% endif -%}
+        </td>
+        <td><span class="truncate" title="{{ em.get('subject', '') }}">{{ em.get('subject', '') }}</span></td>
+        <td class="small soft"><span class="truncate" title="{{ em.get('sender', '') }}">{{ em.get('sender', '') }}</span></td>
+        <td><a class="btn sm ghost" href="/cases/{{ c.email_id }}">Open case</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="scroll-cue">Scroll the table sideways for every column, or use the arrow keys once it has focus.</p>
+<div class="pager" id="pager" hidden>
+  <button class="btn sm" type="button" id="prev-page">← Previous</button>
+  <span class="count-note" id="page-info"></span>
+  <button class="btn sm" type="button" id="next-page">Next →</button>
 </div>
 {% endif %}
 {% endblock %}

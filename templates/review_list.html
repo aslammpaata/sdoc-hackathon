@@ -1,29 +1,70 @@
 {% extends "base.html" %}
 {% block title %}Review queue{% endblock %}
 {% block content %}
-<h1>Review queue <span class="soft" style="font-weight:400">— {{ cases|length }} case{{ '' if cases|length == 1 else 's' }} need a human decision</span></h1>
-<p class="soft">Only cases the system judged genuinely undecidable land here — a confident mismatch is reported as MISMATCH, not escalated. Live from Firestore, never cached; a saved decision leaves the queue immediately.</p>
+{% set n = cases|length %}
+{% set reasons_present = cases|map(attribute='review_reason')|select|list|unique|list %}
+
+<div class="page-head">
+  <div class="grow">
+    <p class="eyebrow">Operations · live</p>
+    <h1>Exception inbox</h1>
+    <p class="lede">Only cases the system judged <strong>genuinely undecidable</strong> land here. A confident mismatch is reported as MISMATCH rather than escalated, so this queue stays short enough to work through.</p>
+    <p class="small faint" style="margin-top:8px">Read live from Firestore on every load — never cached. A saved decision leaves the queue immediately.</p>
+  </div>
+  <div class="head-actions">
+    <span class="count-note"><strong class="mono" style="font-size:22px">{{ n }}</strong> case{{ '' if n == 1 else 's' }} waiting</span>
+  </div>
+</div>
 
 {% if not cases %}
-  <div class="empty">Nothing to review. Every comparison case was decided automatically.</div>
+  <div class="empty">
+    <div class="big">Nothing needs a human right now</div>
+    <p>Every comparison case in the dataset was decided automatically, with the evidence recorded against each one.</p>
+    <p style="margin:0"><a class="btn ghost" href="/cases">Go to the record explorer</a></p>
+  </div>
 {% else %}
-<div class="scroll">
-<table>
-  <thead><tr><th>Email</th><th>Reason</th><th>Undecided fields</th><th>Files</th><th>Subject</th><th>From</th></tr></thead>
-  <tbody>
-  {% for c in cases %}
-    {% set em = c.email or {} %}{% set au = c.audit or {} %}
-    <tr>
-      <td><a class="mono" href="/cases/{{ c.email_id }}">{{ c.email_id }}</a></td>
-      <td><span class="status status-review">{{ c.review_reason }}</span></td>
-      <td class="mono small">{{ (au.undecided_fields or [])|join(', ') or '—' }}</td>
-      <td class="soft">{{ (c.attachments or [])|length }}</td>
-      <td>{{ em.subject }}</td>
-      <td class="soft small">{{ em.sender }}</td>
-    </tr>
+
+{% if reasons_present|length > 1 %}
+<div class="chips" id="reason-filter" hidden style="margin-bottom:16px">
+  <span class="xs faint">Filter by reason:</span>
+  <button class="btn sm" type="button" data-reason="" aria-pressed="true">All · {{ n }}</button>
+  {% for r in reasons_present %}
+    {% set c = cases|selectattr('review_reason', 'equalto', r)|list|length %}
+    <button class="btn sm ghost" type="button" data-reason="{{ r }}" aria-pressed="false">{{ r|replace('_', ' ')|capitalize }} · {{ c }}</button>
   {% endfor %}
-  </tbody>
-</table>
+  <span class="count-note" id="reason-count" role="status" aria-live="polite"></span>
 </div>
+{% endif %}
+
+<ul class="stack" id="queue" style="list-style:none; margin:0; padding:0; display:grid; gap:12px">
+  {% for c in cases %}
+    {% set em = c.get('email') or {} %}{% set au = c.get('audit') or {} %}
+    {% set undecided = au.get('undecided_fields') or [] %}
+    <li class="card" data-reason="{{ c.get('review_reason') or '' }}" style="padding:16px 20px">
+      <div class="row" style="justify-content:space-between; align-items:flex-start; gap:16px">
+        <div style="flex:1 1 380px; min-width:0">
+          <div class="row" style="gap:10px">
+            <span class="status status-review"><i class="sh"></i>{{ (c.get('review_reason') or 'review')|replace('_', ' ') }}</span>
+            <a class="mono small" href="/cases/{{ c.email_id }}">{{ c.email_id }}</a>
+          </div>
+          <div style="font-weight:600; margin-top:8px; overflow-wrap:anywhere">{{ em.get('subject') or '(no subject)' }}</div>
+          <div class="small soft" style="margin-top:3px; overflow-wrap:anywhere">from {{ em.get('sender') or 'unknown sender' }}</div>
+          <div class="row small faint" style="gap:14px; margin-top:8px">
+            <span>{{ (c.get('attachments') or [])|length }} attachment{{ '' if (c.get('attachments') or [])|length == 1 else 's' }}</span>
+            {% if undecided %}
+              <span>{{ undecided|length }} undecided field{{ '' if undecided|length == 1 else 's' }}: <span class="mono">{{ undecided|join(', ') }}</span></span>
+            {% endif %}
+            {% if c.get('category') %}<span class="tag cat">{{ c.get('category') }}</span>{% endif %}
+          </div>
+        </div>
+        <div style="flex:none">
+          <a class="btn warn" href="/cases/{{ c.email_id }}">Review case →</a>
+        </div>
+      </div>
+    </li>
+  {% endfor %}
+</ul>
+
+<p class="scroll-cue" style="margin-top:16px">Opening a case shows the full six-stage trace and the evidence behind every field before you decide.</p>
 {% endif %}
 {% endblock %}

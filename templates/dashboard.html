@@ -1,81 +1,171 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
+{% block title %}Verification command center{% endblock %}
 {% block content %}
 {% set o = overview %}
-<h1>Shipping document verification</h1>
-<p class="soft">Every email in the inbox is classified; document-check requests have their Shipping Instruction compared field by field against the draft Bill of Lading. What the system could not decide is waiting in the <a href="/review">review queue</a>. Everything below is aggregated from the case records and refreshes automatically.</p>
+{% set P = o.processed if o.processed else 0 %}
+{% set n_ok = o.statuses.get('OK', 0) %}
+{% set n_mm = o.statuses.get('MISMATCH', 0) %}
+{% set n_rv = o.statuses.get('NEEDS_REVIEW', 0) %}
+{% set n_na = o.statuses.get('null', 0) %}
+{# every percentage below is display-only, computed from the counts already rendered #}
+{% macro pct(v) -%}{{ ((100 * v / P)|round(1)) if P else 0 }}{%- endmacro %}
 
-<div class="grid tiles" style="margin-top:16px">
-  <div class="tile"><div class="n">{{ o.processed }}</div><div class="l">emails processed</div></div>
-  <a class="tile ok" href="/cases?status=OK"><div class="n">{{ o.statuses.get('OK', 0) }}</div><div class="l">OK — SI and BL agree</div></a>
-  <a class="tile mismatch" href="/cases?status=MISMATCH"><div class="n">{{ o.statuses.get('MISMATCH', 0) }}</div><div class="l">MISMATCH — defects found</div></a>
-  <a class="tile review" href="/review"><div class="n">{{ o.statuses.get('NEEDS_REVIEW', 0) }}</div><div class="l">escalated to a human</div></a>
-  <a class="tile na" href="/cases?status=null"><div class="n">{{ o.statuses.get('null', 0) }}</div><div class="l">no comparison applies</div></a>
+<div class="page-head">
+  <div class="grow">
+    <p class="eyebrow">Operations</p>
+    <h1>Verification command center</h1>
+    <p class="lede">Every email in the inbox is classified. Document-check requests have their Shipping Instruction compared field by field against the draft Bill of Lading. Anything the system could not decide is waiting for a person.</p>
+    <p class="small faint" style="margin-top:8px">
+      Aggregated from the case records · cached, up to 60&nbsp;s old
+      {%- if o.cached_seconds is not none %} · refreshed {{ o.cached_seconds }}s ago{% endif %}.
+      The review queue itself is always live.
+    </p>
+  </div>
+  <div class="head-actions">
+    {% if n_rv %}
+      <a class="btn warn" href="/review">Open review queue · {{ n_rv }}</a>
+      <a class="btn ghost" href="/cases">Explore all cases</a>
+    {% else %}
+      <a class="btn primary" href="/cases">Explore all cases</a>
+      <a class="btn ghost" href="/review">Review queue</a>
+    {% endif %}
+  </div>
 </div>
 
-<div class="grid two" style="margin-top:14px">
-  <div class="card">
-    <h3>Categories</h3>
-    <div class="bars">
-      {% for k, v in o.categories %}
-        <a class="k" href="/cases?category={{ k }}">{{ k }}</a><div class="b"><i style="width:{{ (100 * v / o.processed)|round(1) }}%"></i></div><div class="v">{{ v }}</div>
-      {% endfor %}
-    </div>
+<div class="kpis">
+  <div class="kpi">
+    <div class="n">{{ P }}</div>
+    <div class="l">emails processed</div>
+    <div class="go">the whole inbox</div>
   </div>
-  <div class="card">
-    <h3>How attachments were read</h3>
-    <div class="bars">
-      {% for k, v in o.readers %}
-        <span class="k">{{ o.reader_labels.get(k, k) }}</span><div class="b"><i class="{{ 'danger' if k == 'unreadable' else ('warn' if k == 'ocr' else '') }}" style="width:{{ (100 * v / o.readers_total)|round(1) }}%"></i></div><div class="v">{{ v }}</div>
-      {% endfor %}
-    </div>
-    <p class="small soft" style="margin-top:8px">Format is sniffed from the bytes, never the extension. Scans go to Gemini's vision — no OCR engine.</p>
-  </div>
+  <a class="kpi is-ok" href="/cases?status=OK">
+    <div class="n">{{ n_ok }}<span class="pct">{{ pct(n_ok) }}%</span></div>
+    <div class="l">OK — SI and BL agree</div>
+    <div class="go">View cases →</div>
+  </a>
+  <a class="kpi is-mismatch" href="/cases?status=MISMATCH">
+    <div class="n">{{ n_mm }}<span class="pct">{{ pct(n_mm) }}%</span></div>
+    <div class="l">MISMATCH — defects found</div>
+    <div class="go">View cases →</div>
+  </a>
+  <a class="kpi is-review" href="/review">
+    <div class="n">{{ n_rv }}<span class="pct">{{ pct(n_rv) }}%</span></div>
+    <div class="l">awaiting a human decision</div>
+    <div class="go">Open the queue →</div>
+  </a>
+  <a class="kpi is-na" href="/cases?status=null">
+    <div class="n">{{ n_na }}<span class="pct">{{ pct(n_na) }}%</span></div>
+    <div class="l">no comparison applies</div>
+    <div class="go">View cases →</div>
+  </a>
 </div>
 
-<div class="grid two" style="margin-top:14px">
+<section class="section">
+  <h2>Outcome distribution</h2>
+  <p class="section-note">Share of all {{ P }} processed emails. Not-applicable covers every message that was never a document check.</p>
   <div class="card">
-    <h3>Why cases were escalated</h3>
-    {% if o.reasons %}
-    <div class="bars">
-      {% for k, v in o.reasons %}
-        <a class="k" href="/review">{{ k }}</a><div class="b"><i class="warn" style="width:{{ (100 * v / o.statuses.get('NEEDS_REVIEW', 1))|round(1) }}%"></i></div><div class="v">{{ v }}</div>
-      {% endfor %}
+    <div class="rail" role="img" aria-label="Outcomes: {{ n_ok }} OK, {{ n_mm }} mismatch, {{ n_rv }} awaiting review, {{ n_na }} not applicable, of {{ P }} emails.">
+      {% if n_ok %}<span class="seg-ok" style="width:{{ pct(n_ok) }}%"></span>{% endif %}
+      {% if n_mm %}<span class="seg-mismatch" style="width:{{ pct(n_mm) }}%"></span>{% endif %}
+      {% if n_rv %}<span class="seg-review" style="width:{{ pct(n_rv) }}%"></span>{% endif %}
+      {% if n_na %}<span class="seg-na" style="width:{{ pct(n_na) }}%"></span>{% endif %}
     </div>
-    {% else %}<p class="soft">Nothing escalated.</p>{% endif %}
-    <p style="margin-top:10px"><a class="btn" href="/review">Open the review queue →</a></p>
-  </div>
-  <div class="card">
-    <h3>Fields that differed (across all MISMATCH cases)</h3>
-    {% if o.defects %}
-    <div class="bars">
-      {% for k, v in o.defects %}
-        <span class="k">{{ k }}</span><div class="b"><i class="danger" style="width:{{ (100 * v / o.defects_max)|round(1) }}%"></i></div><div class="v">{{ v }}</div>
-      {% endfor %}
+    <div class="legend">
+      <span class="key"><i class="seg-ok"></i>OK <b>{{ n_ok }}</b></span>
+      <span class="key"><i class="seg-mismatch"></i>Mismatch <b>{{ n_mm }}</b></span>
+      <span class="key"><i class="seg-review"></i>Needs review <b>{{ n_rv }}</b></span>
+      <span class="key"><i class="seg-na"></i>Not applicable <b>{{ n_na }}</b></span>
     </div>
-    {% else %}<p class="soft">No defects recorded.</p>{% endif %}
   </div>
-</div>
+</section>
+
+<section class="section">
+  <h2>Pipeline activity</h2>
+  <p class="section-note">Two different units: categories count <strong>emails</strong>, readers count <strong>attachment files</strong>. The two charts are not comparable to each other.</p>
+  <div class="grid two">
+    <div class="card">
+      <div class="card-head"><h3>Categories</h3><span class="unit">% of {{ P }} emails</span></div>
+      <div class="bars">
+        {% for k, v in o.categories %}
+          <a class="k" href="/cases?category={{ k }}" title="{{ k }}"><code>{{ k }}</code></a>
+          <div class="b"><i style="width:{{ pct(v) }}%"></i></div>
+          <div class="v">{{ v }}<em>{{ pct(v) }}%</em></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>How attachments were read</h3><span class="unit">% of {{ o.readers_total }} files</span></div>
+      <div class="bars">
+        {% for k, v in o.readers %}
+          <span class="k" title="{{ k }}">{{ o.reader_labels.get(k, k) }}</span>
+          <div class="b"><i class="{{ 'danger' if k == 'unreadable' else ('warn' if k == 'ocr' else '') }}" style="width:{{ (100 * v / o.readers_total)|round(1) }}%"></i></div>
+          <div class="v">{{ v }}<em>{{ (100 * v / o.readers_total)|round(1) }}%</em></div>
+        {% endfor %}
+      </div>
+      <p class="hint" style="margin-top:12px">Format is sniffed from the bytes, never the extension. Scans go to Gemini vision — no OCR engine is installed.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Exception intelligence</h2>
+  <p class="section-note">Where human attention is needed, and which fields fail most often.</p>
+  <div class="grid two">
+    <div class="card">
+      <div class="card-head"><h3>Why cases were escalated</h3><span class="unit">% of {{ n_rv }} escalations</span></div>
+      {% if o.reasons %}
+        <div class="bars">
+          {% for k, v in o.reasons %}
+            <a class="k" href="/cases?reason={{ k }}" title="{{ k }}">{{ k|replace('_', ' ')|capitalize }}</a>
+            <div class="b"><i class="warn" style="width:{{ (100 * v / (n_rv if n_rv else 1))|round(1) }}%"></i></div>
+            <div class="v">{{ v }}</div>
+          {% endfor %}
+        </div>
+        <p style="margin:16px 0 0"><a class="btn warn sm" href="/review">Open the review queue →</a></p>
+      {% else %}
+        <p class="soft">Nothing escalated — every comparison case was decided automatically.</p>
+      {% endif %}
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Fields that differed</h3><span class="unit">count, across {{ n_mm }} MISMATCH cases</span></div>
+      {% if o.defects %}
+        <div class="bars">
+          {% for k, v in o.defects %}
+            <span class="k" title="{{ k }}"><code>{{ k }}</code></span>
+            <div class="b"><i class="danger" style="width:{{ (100 * v / o.defects_max)|round(1) }}%"></i></div>
+            <div class="v">{{ v }}</div>
+          {% endfor %}
+        </div>
+        <p class="hint" style="margin-top:12px">Bars are scaled to the most frequent field ({{ o.defects_max }}), so their length is relative to each other only — not to the charts above.</p>
+      {% else %}
+        <p class="soft">No field defects recorded.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
 
 {% if tour %}
-<h2>Hard cases — a tour of the sample dataset</h2>
-<p class="soft small" style="margin-top:-4px">Hand-picked from this dataset's 520 emails; each link opens the full six-stage trace.</p>
-<div class="tour">
-  {% for t in tour %}
-  <a href="/cases/{{ t.email_id }}">
-    <div class="id"><span>{{ t.email_id }}</span>{% if t.status == 'OK' %}<span class="status status-ok">OK</span>{% elif t.status == 'MISMATCH' %}<span class="status status-mismatch">MISMATCH</span>{% elif t.status == 'NEEDS_REVIEW' %}<span class="status status-review">REVIEW</span>{% else %}<span class="status status-na">n/a</span>{% endif %}</div>
-    <div class="t">{{ t.title }}</div>
-    <div class="d">{{ t.blurb }}</div>
-  </a>
-  {% endfor %}
-</div>
+<section class="section">
+  <details class="box">
+    <summary><strong>Demo scenarios</strong> — {{ tour|length }} hard cases from this dataset, each opening its full six-stage trace</summary>
+    <div class="body">
+      <div class="tour">
+        {% for t in tour %}
+        <a href="/cases/{{ t.email_id }}">
+          <div class="id">
+            <span>{{ t.email_id }}</span>
+            {% if t.status == 'OK' %}<span class="status status-ok"><i class="sh"></i>OK</span>
+            {% elif t.status == 'MISMATCH' %}<span class="status status-mismatch"><i class="sh"></i>MISMATCH</span>
+            {% elif t.status == 'NEEDS_REVIEW' %}<span class="status status-review"><i class="sh"></i>REVIEW</span>
+            {% else %}<span class="status status-na"><i class="sh"></i>n/a</span>{% endif %}
+          </div>
+          <div class="t">{{ t.title }}</div>
+          <div class="d">{{ t.blurb }}</div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
+</section>
 {% endif %}
-
-<h2>Where to look</h2>
-<div class="row">
-  <a class="btn" href="/cases">Browse all {{ o.processed }} cases</a>
-  <a class="btn secondary" href="/review">Review queue ({{ o.statuses.get('NEEDS_REVIEW', 0) }})</a>
-  <a class="btn secondary" href="/api/submission">submission.json</a>
-  <a class="btn secondary" href="/docs">API reference</a>
-</div>
 {% endblock %}
