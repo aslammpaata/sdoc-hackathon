@@ -141,6 +141,8 @@ GET  /review          → cases where status == NEEDS_REVIEW (live query, never 
 GET  /review/{id}     → 307 → /cases/{id}
 POST /review/{id}     → write correction to Firestore, 303 → /review  (unchanged)
 GET  /static/app.css  → the one stylesheet (tokens shared with the architecture diagram + deck)
+GET  /static/app.js   → progressive enhancement only: theme toggle, client search/paging on /cases,
+                        copy buttons, reason chips on /review. Every page works with JS off.
 GET  /api/submission  → submission.json projection                    (live)
 POST /api/run?limit=&workers=  → stages 1–6 over the inbox, sync     (live, ~7 min)
 POST /api/decide?force=        → stage 6 only, no LLM, ~45 s          (live)
@@ -161,6 +163,23 @@ hard-case tour (`main.TOUR`) is a list of ids + blurbs; ids absent from the load
 data are skipped, so a different dataset doesn't 404. Status is readable from shape
 and colour, not just the word; `matched_after_normalisation` is drawn differently
 from `matched` on purpose.
+
+Guard rails added before submission (Sep 22): the correction form is open only on
+NEEDS_REVIEW cases; decided comparison cases show a read-only "decided
+automatically" panel with the form behind a `<details>` override toggle
+(`main.case_detail` sets `form_mode` ∈ open/override/none); non-comparison cases
+have no form. `POST /review/{id}` itself is unchanged and still accepts an override.
+The case page also renders **plain-text attachments verbatim from GCS** in a
+"Source documents" panel (`main.source_texts`; `documents.sniff` decides, never a
+reader, so no model can be invoked), with non-Latin runs in `<mark>` — this is how
+the 毛重 claim in the tour is verifiable on the page. Wide tables scroll inside
+their own container; the grid items carry `min-width:0` so the page body never
+scrolls sideways (verified via CDP at 700/390/360 px).
+
+`origin/frontend-redesign` (Am7-ys, "verification operations console") was
+merged Sep 22 as `6339759`: restyled every template, added `static/app.js`. It kept
+the route contract, `form_mode`, the tour and the source panel — verified with the
+same read-only suite before merging.
 
 Exception: if the frontend owner is genuinely much faster in React, build a static
 bundle and serve it from the same container via `StaticFiles`. Still one URL, still
@@ -280,6 +299,7 @@ app/
   schema.py       # canonical fields + submission output shape + build_submission()
 templates/        # Jinja2 — base.html, dashboard.html, cases.html, case_detail.html, review_list.html
 static/app.css    # the one stylesheet: light/dark tokens, IBM Plex, status + reason semantics
+static/app.js     # progressive enhancement only; every page works without it
 scripts/
   deploy.sh
   score.py        # POSTs the Firestore projection to the organizer /submit
@@ -349,7 +369,12 @@ detection belong to a separate authenticity module. Likely judge question.
   re-runs by design, so a stray click costs reliability points until reverted —
   check `review.resolved_by` across cases before submitting.
 - `origin/lihong/UI` is superseded by the Sep 22 front-end pass (different token
-  system); leave unmerged, delete when its owner agrees.
+  system); leave unmerged, delete when its owner agrees. `origin/frontend-redesign`
+  is merged — its owner can delete the remote branch.
+- The dataset has **no non-Latin text in stored evidence** (0 of 520 cases —
+  extract.py stores values, not labels). Any multilingual claim in the deck must
+  be phrased as "bilingual labels mapped to canonical fields" and pointed at the
+  Source documents panel on `/cases/email_348`, never at extracted values.
 
 ## Progress — Stages 1–6 + review UI done (as of Sep 21)
 - **Stages 1–2** (`8c44d9b`): `ingest.py` strips quoted history + banners before
@@ -395,9 +420,17 @@ detection belong to a separate authenticity module. Likely judge question.
   Finding: the dataset's non-English content is bilingual *labels*
   (`Gross Weight毛重(KGS)`, 54 cases), not CJK values — say "Chinese label" in
   the pitch, not "Chinese port".
-- **Deployed Sep 22:** image `sdoc-api:2713b2e` → revision `sdoc-api-00006-545`
-  (00005 = code, 00006 = `min-instances=1`), https://sdoc-api-he56zusm2a-as.a.run.app
-  — verified live: `/` dashboard 0.14 s, `/cases` 520 rows, `?q=` 307, `/cases/{id}`
-  six stages, `/review` 17 rows live, `/review/{id}` 307, `/static/app.css`,
-  `/api/submission` 520 entries OK 66 / MISMATCH 46 / NEEDS_REVIEW 17 / null 391;
-  `/debug/store` 404; timeout 1800; no errors in logs.
+- **Pre-submission fixes (Sep 22, `818a94f`)**: Source-documents panel (毛重
+  verifiable on the page), override guard on decided cases, grid `min-width:0`
+  overflow fix, dashboard copy no longer exposes cache age. Tour copy re-checked
+  against every linked page.
+- **Front-end redesign merged (Sep 22, `6339759`, Am7-ys)**: operations-console
+  styling across all templates + `static/app.js`; route contract, guard, tour and
+  source panel intact.
+- **Deployed Sep 22:** image `sdoc-api:6339759` → revision **`sdoc-api-00008-n77`**
+  (`min-instances=1` retained), https://sdoc-api-he56zusm2a-as.a.run.app — verified
+  live: all pages 200, `?q=` and `/review/{id}` 307, form modes open/override/none
+  correct on 517/348/003/002, 毛重 marked on 348, all 8 tour ids, `/review` 17
+  unique cases, `/api/submission` 520 entries OK 66 / MISMATCH 46 / NEEDS_REVIEW 17
+  / null 391 equal to the frozen baseline; timeout 1800; no errors in logs.
+  `main == origin/main == 6339759`.

@@ -10,10 +10,17 @@ a human review queue with the evidence laid out side by side.
 
 | Path | What it is |
 | --- | --- |
-| `/review` | Review queue — every case that needs a human decision |
-| `/review/{email_id}` | SI vs BL side by side, per-field evidence, correction form |
+| `/` | Dashboard — status and category distribution, how attachments were read, escalations, and a tour of the hardest cases in the dataset |
+| `/cases` | Explorer over all 520 cases — filter by status, category or review reason; jump straight to an `email_id` |
+| `/cases/{email_id}` | The six-stage trace for one case: what was stripped, how it was classified, how each file was read and verified, every extracted field with its verbatim source, the per-field comparison, the decision — plus the source documents as stored and a full audit record (file hashes, rule versions, timestamps) |
+| `/review` | Review queue — only the cases the system judged genuinely undecidable |
 | `/api/submission` | The scored output (`submission.json`) projected live from the database |
 | `/docs` | Interactive API reference |
+
+A reviewer's decision, saved from a case page, updates `submission.json` immediately
+and survives every re-run of the pipeline. On cases the system already decided the
+form sits behind an explicit "override" toggle, so a stray click can't change the
+graded output.
 
 ## What it does
 
@@ -53,7 +60,12 @@ Cloud Run).
 
 **Results on the 520-email evaluation set** (organizer scorer): classification
 macro-F1 ≥ 0.996, defect F1 1.0, end-to-end 46/46, review-escalation precision
-1.0. See `CLAUDE.md` for the full engineering log.
+1.0, final score 0.999. See `CLAUDE.md` for the full engineering log.
+
+**Multilingual note.** This dataset's non-English content is bilingual *labels*
+(`Gross Weight毛重(KGS)` appears in 54 documents), not non-Latin values. Stage 4
+maps such labels to the canonical field regardless of language; the case page
+shows the source document with non-Latin text highlighted so this is verifiable.
 
 ## Run it
 
@@ -73,7 +85,8 @@ main.py           FastAPI app, pipeline runner, review routes
 app/ingest.py     stage 1     app/classify.py   stage 2     app/documents.py  stage 3
 app/extract.py    stage 4     app/compare.py    stage 5     app/decide.py     stage 6
 app/store.py      Firestore + Cloud Storage     app/llm_client.py  the one Gemini interface
-app/schema.py     canonical fields, contract    templates/         review UI
+app/schema.py     canonical fields, contract    templates/         dashboard, explorer, case trace, queue
+static/app.css    one stylesheet (light/dark)   static/app.js      progressive enhancement only
 scripts/          deploy.sh, score.py           data/loader.py     organizer inbox loader
 ```
 
