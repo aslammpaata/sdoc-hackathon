@@ -84,6 +84,23 @@
     </div>
   </section>
 
+  <!-- Source documents (read from Cloud Storage, exactly as stored) -->
+  {% if sources %}
+  <section class="stage src">
+    <div class="num">≡</div>
+    <div>
+      <h2>Source documents <span class="soft" style="font-weight:400;font-size:13px">— as stored, read from Cloud Storage</span></h2>
+      <div class="sub">Plain-text files are shown verbatim; <mark>non-Latin text is highlighted</mark>. Binary files are not decoded here — Stage 3 says how each was read.</div>
+      {% for src in sources %}
+      <details {% if src.non_latin %}open{% endif %} style="margin-top:6px">
+        <summary class="mono" style="cursor:pointer">{{ src.filename }}{% if src.note %} <span class="soft small">— {{ src.note }}</span>{% endif %}{% if src.non_latin %} <span class="tag">non-Latin text</span>{% endif %}</summary>
+        {% if src.html %}<div class="scroll" style="margin-top:6px"><pre class="src-text">{{ src.html|safe }}</pre></div>{% endif %}
+      </details>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
   <!-- 4 Extract -->
   <section class="stage {{ '' if t.extract.ran else 'skipped' }}">
     <div class="num">4</div>
@@ -175,8 +192,7 @@
   </dl>
 </div>
 
-{% if show_form %}
-<h2>Your decision</h2>
+{% macro correction_form() %}
 <form class="correct" method="post" action="/review/{{ case.email_id }}">
   <fieldset>
     <legend>Status</legend>
@@ -194,5 +210,28 @@
   </div>
   <p><button type="submit">Save decision</button> <span class="soft small">— writes to Firestore; submission.json and the queue update immediately.</span></p>
 </form>
+{% endmacro %}
+
+{% if form_mode == 'open' %}
+<h2>Your decision</h2>
+<p class="soft small" style="margin-top:-4px">This case was escalated because the system could not decide it. Your decision replaces the automatic one and survives re-runs.</p>
+{{ correction_form() }}
+{% elif form_mode == 'override' %}
+<h2>Decision</h2>
+<div class="card">
+  <div class="row"><strong>Decided automatically</strong> {{ status_pill(case.status) }}</div>
+  <p class="soft" style="margin:8px 0 0">{{ t.decide.conclusion }} <span class="small">Compare rules v{{ audit.rule_version or '—' }} · decision rule v{{ audit.decision_version or '—' }}{% if audit.decided_at %} · {{ audit.decided_at[:19] }}Z{% endif %}.</span></p>
+  <details style="margin-top:12px">
+    <summary class="soft" style="cursor:pointer">Override this decision</summary>
+    <p class="notice small" style="margin:10px 0">An override is a human decision: it is written to Firestore, changes <span class="mono">submission.json</span>, and is kept across every re-run of the pipeline until explicitly reset.</p>
+    {{ correction_form() }}
+  </details>
+</div>
+{% else %}
+<h2>Decision</h2>
+<div class="card">
+  <div class="row"><strong>Decided automatically</strong> {{ status_pill(case.status) }}</div>
+  <p class="soft" style="margin:8px 0 0">{{ t.decide.conclusion }} Nothing to review or override for a non-comparison email.</p>
+</div>
 {% endif %}
 {% endblock %}

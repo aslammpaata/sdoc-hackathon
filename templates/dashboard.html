@@ -3,7 +3,7 @@
 {% block content %}
 {% set o = overview %}
 <h1>Shipping document verification</h1>
-<p class="soft">Every email in the inbox is classified; document-check requests have their Shipping Instruction compared field by field against the draft Bill of Lading. What the system could not decide is waiting in the <a href="/review">review queue</a>. Everything below is aggregated live from the case records{% if o.cached_seconds is not none %} (cached {{ o.cached_seconds }}s){% endif %}.</p>
+<p class="soft">Every email in the inbox is classified; document-check requests have their Shipping Instruction compared field by field against the draft Bill of Lading. What the system could not decide is waiting in the <a href="/review">review queue</a>. Everything below is aggregated from the case records and refreshes automatically.</p>
 
 <div class="grid tiles" style="margin-top:16px">
   <div class="tile"><div class="n">{{ o.processed }}</div><div class="l">emails processed</div></div>

@@ -253,14 +253,49 @@ DECISION_NOTES = {
 # A tour of this sample dataset. Ids absent from the loaded data are skipped.
 TOUR = [
     ("email_501", "Invoice posing as a BL", "The 'BL' file is a commercial invoice — caught by reading the content, not the filename."),
-    ("email_348", "Chinese label, composite port, party aliases", "毛重 (gross weight) label mapped to the canonical field; RUGAO/NANTONG/SHANGHAI resolved to one UN/LOCODE; shipper and consignee matched after stripping 'on behalf of' and addresses."),
+    ("email_348", "Chinese label, composite port, party aliases", "The BL labels the weight in Chinese (毛重 — open Source documents on the page); RUGAO/NANTONG/SHANGHAI resolved to one UN/LOCODE; shipper and consignee matched after normalisation stripped 'on behalf of' and addresses."),
     ("email_013", "Port swapped, code kept", "BL says TUTICORIN, INDIA (KEMBA) where the SI says MOMBASA, KENYA (KEMBA) — the bracketed code was left behind; the name decides, so the defect is caught."),
     ("email_517", "Placeholders instead of ports", "SI carries TBA and ____MT where both ports should be — undecidable, escalated as unreadable."),
     ("email_507", "One document of two", "A comparison was requested but only the SI arrived — escalated as missing_attachment."),
-    ("email_512", "Scanned SI, read by vision", "No text layer; Gemini reads the page image directly — no OCR engine involved."),
-    ("email_513", "Scanned document, vision + normalisation", "Read by vision, then the shipper matched only after normalisation."),
-    ("email_514", "Scanned document, clean match", "Vision-read scan where every field agreed."),
+    ("email_512", "Two scanned PDFs, read by vision", "Neither document has a text layer; Gemini reads the page images directly — no OCR engine involved. All seven fields matched."),
+    ("email_513", "Scans + a stray comma", "Both documents scanned; vision read the shipper as 'APRIL, FINE PAPER TRADING' — normalisation matched it to the BL's 'APRIL FINE PAPER TRADING'."),
+    ("email_514", "Two scanned PDFs, clean match", "Both read by vision; every field agreed without normalisation."),
 ]
+
+
+_SOURCE_CAP = 20_000
+_NON_ASCII_RUN = __import__("re").compile(r"[^\x00-\x7f]+")
+
+
+def source_texts(case: dict) -> list[dict]:
+    """Plain-text attachments as stored in GCS, for the 'Source documents' panel.
+
+    Read-only. Only files whose bytes sniff as text are rendered; PDFs, images and
+    Office files are listed as binary — decoding those is stage 3's job and would
+    mean invoking a reader (for scans, the model), which this page never does.
+    Non-ASCII runs are wrapped in <mark> so a bilingual label is visible at a glance.
+    """
+    from markupsafe import escape
+
+    from app import documents, store
+
+    out = []
+    for a in case.get("attachments") or []:
+        try:
+            data = store.get_attachment(case["email_id"], a["filename"])
+        except Exception as e:  # noqa: BLE001 — a missing object is shown, not fatal
+            out.append({"filename": a["filename"], "html": None, "note": f"could not fetch: {type(e).__name__}"})
+            continue
+        if documents.sniff(data) != "text":
+            out.append({"filename": a["filename"], "html": None, "note": "binary — see Stage 3 for how it was read"})
+            continue
+        text = data.decode("utf-8", errors="replace")
+        clipped = len(text) > _SOURCE_CAP
+        html = str(escape(text[:_SOURCE_CAP]))
+        html = _NON_ASCII_RUN.sub(lambda m: f"<mark>{m.group(0)}</mark>", html)
+        out.append({"filename": a["filename"], "html": html, "note": "truncated" if clipped else None,
+                    "non_latin": bool(_NON_ASCII_RUN.search(text))})
+    return out
 
 
 def overview(cases: list[dict]) -> dict:
@@ -429,9 +464,18 @@ def case_detail(request: Request, email_id: str):
         raise HTTPException(status_code=404, detail=f"no case {email_id}")
     cached, _ = _cases_cached()
     trace = build_trace(case, [c["email_id"] for c in cached])
-    show_form = case.get("category") == "BL_COMPARISON" and case.get("status") is not None
+    # The form is open only where a human decision is actually being asked for.
+    # Decided comparison cases get a read-only panel with an explicit override toggle;
+    # non-comparison cases have nothing to override. POST /review/{id} is unchanged.
+    if case.get("status") == "NEEDS_REVIEW":
+        form_mode = "open"
+    elif case.get("category") == "BL_COMPARISON":
+        form_mode = "override"
+    else:
+        form_mode = "none"
     return templates.TemplateResponse(request, "case_detail.html", {
-        "nav": "cases", "case": case, "fields": COMPARED_FIELDS, "trace": trace, "show_form": show_form,
+        "nav": "cases", "case": case, "fields": COMPARED_FIELDS, "trace": trace,
+        "form_mode": form_mode, "sources": source_texts(case),
     })
 
 
