@@ -134,9 +134,13 @@ CORS, no second deploy target, one URL. A review queue is a list, a detail view 
 a correction form; a form post does that without a framework.
 
 ```
-GET  /review          → cases where status == NEEDS_REVIEW          (live)
-GET  /review/{id}     → SI vs BL side by side, evidence, confidence   (live)
-POST /review/{id}     → write correction to Firestore, 303 → /review  (live)
+GET  /                → dashboard: counts, categories, readers, escalations, hard-case tour
+GET  /cases           → explorer over all 520 (filters: status, category, reason; ?q= jumps to an id)
+GET  /cases/{id}      → canonical detail: six-stage trace + audit exhibit + correction form
+GET  /review          → cases where status == NEEDS_REVIEW (live query, never cached)
+GET  /review/{id}     → 307 → /cases/{id}
+POST /review/{id}     → write correction to Firestore, 303 → /review  (unchanged)
+GET  /static/app.css  → the one stylesheet (tokens shared with the architecture diagram + deck)
 GET  /api/submission  → submission.json projection                    (live)
 POST /api/run?limit=&workers=  → stages 1–6 over the inbox, sync     (live, ~7 min)
 POST /api/decide?force=        → stage 6 only, no LLM, ~45 s          (live)
@@ -145,6 +149,18 @@ GET  /debug/store     → Firestore+GCS round-trip; 404 unless DEBUG_ROUTES=1 (n
 ```
 
 API stays under `/api/*` so it never collides with UI routes.
+
+Front-end rules (Sep 22 pass): the UI is **read-only over the case records** — the
+only write is `POST /review/{id}`; there is deliberately no "re-run" control. `/`
+and `/cases` read a 60 s in-process cache of all cases (stale-while-revalidate,
+warmed in a thread at startup, `main._cases_cached`) because 520 Firestore reads
+per page load is visibly slow; `/review` and `/cases/{id}` are always live so a
+saved decision shows immediately. Stage-3 "verified as SI/BL" on the detail page is
+derived from which file stage 4 cited as `source` — nothing new is stored. The
+hard-case tour (`main.TOUR`) is a list of ids + blurbs; ids absent from the loaded
+data are skipped, so a different dataset doesn't 404. Status is readable from shape
+and colour, not just the word; `matched_after_normalisation` is drawn differently
+from `matched` on purpose.
 
 Exception: if the frontend owner is genuinely much faster in React, build a static
 bundle and serve it from the same container via `StaticFiles`. Still one URL, still
@@ -242,10 +258,11 @@ values.
   worth the remaining hours. Revisit only if genuinely ahead.
 - **No Vercel / frontend split.** See Frontend above.
 - **No Postgres / Cloud SQL.** Firestore needs no instance, no pooling, no schema.
-- **`--min-instances=1` before judging**, not now:
-  `gcloud run services update sdoc-api --region=asia-southeast1 --min-instances=1`
-  Stops scale-to-zero so judges never hit a cold start. Costs a couple of dollars
-  across the judging window against the $300 credit.
+- **`--min-instances=1` — ON since Sep 22** (revision `sdoc-api-00006-545`; first
+  dashboard hit 0.14 s instead of a 5–15 s cold start). Costs a couple of dollars a
+  day against the $300 credit. It persists across `deploy.sh` runs. **Turn it off
+  after judging:**
+  `gcloud run services update sdoc-api --region=asia-southeast1 --min-instances=0`
 
 ## Repo structure
 ```
@@ -261,7 +278,8 @@ app/
   store.py        # Firestore + Cloud Storage access
   llm_client.py   # single interface wrapping Gemini (Vertex AI via ADC, or API key)
   schema.py       # canonical fields + submission output shape + build_submission()
-templates/        # Jinja2 — base.html, review_list.html, review_detail.html
+templates/        # Jinja2 — base.html, dashboard.html, cases.html, case_detail.html, review_list.html
+static/app.css    # the one stylesheet: light/dark tokens, IBM Plex, status + reason semantics
 scripts/
   deploy.sh
   score.py        # POSTs the Firestore projection to the organizer /submit
@@ -324,7 +342,14 @@ detection belong to a separate authenticity module. Likely judge question.
   Say in the pitch: "we read scans the reference solution gave up on".
 - Classify-only / analyse-only re-run mode: `python main.py run` redoes every stage
   including re-uploading attachments (~7 min). `decide` alone is 45 s.
-- `--min-instances=1` before judging — see Deployment decisions. Not done yet.
+- `--min-instances=1` is ON (Sep 22) — remember to turn it off after judging.
+- The "Save decision" form is live on the public URL. A teammate saved a wrong
+  MISMATCH on `email_501` (the invoice-posing-as-BL case) on Sep 21; it was
+  reverted with `decide_case(case, force=True)`. Human decisions are kept across
+  re-runs by design, so a stray click costs reliability points until reverted —
+  check `review.resolved_by` across cases before submitting.
+- `origin/lihong/UI` is superseded by the Sep 22 front-end pass (different token
+  system); leave unmerged, delete when its owner agrees.
 
 ## Progress — Stages 1–6 + review UI done (as of Sep 21)
 - **Stages 1–2** (`8c44d9b`): `ingest.py` strips quoted history + banners before
@@ -357,9 +382,22 @@ detection belong to a separate authenticity module. Likely judge question.
   unreadable, 2 missing_value). Contract invariants hold over all 520; a POST
   correction through `/review/{id}` leaves the queue and updates
   `/api/submission` immediately.
-- **Deployed Sep 21:** image `sdoc-api:3b11341` → revision `sdoc-api-00004-m8b`,
-  https://sdoc-api-he56zusm2a-as.a.run.app — verified live: `/` 307 → `/review`,
-  `/health`, `/review` (17 rows), `/review/{id}`, `/api/submission` (520 entries,
-  OK 66 / MISMATCH 46 / NEEDS_REVIEW 17 / null 391); `/debug/store` 404s as
-  intended; timeout 1800; `.dockerignore` keeps `.env` and `.git` out of the image;
-  no errors in logs. `--min-instances` still unset (do it just before judging).
+- **Front-end pass (Sep 22, `2713b2e`)** — read-only over frozen Firestore, no
+  pipeline file touched: dashboard at `/`, `/cases` explorer with filters + jump
+  box, `/cases/{id}` six-stage trace (ingest → classify → validate → extract →
+  compare → decide, each with inputs and a conclusion; skipped stages say why) with
+  the audit record promoted to a full exhibit (sha256 per file, GCS URI, rule and
+  decision versions, per-stage timestamps); hard-case tour on the dashboard
+  (`501` invoice-as-BL, `348` 毛重 label + composite port + party aliases, `013`
+  port swapped with code kept, `517` placeholders, `507` one of two docs,
+  `512–514` vision-read scans); one stylesheet on the deck's token system, dark
+  mode, phone width. `/api/submission` proven byte-identical before/after.
+  Finding: the dataset's non-English content is bilingual *labels*
+  (`Gross Weight毛重(KGS)`, 54 cases), not CJK values — say "Chinese label" in
+  the pitch, not "Chinese port".
+- **Deployed Sep 22:** image `sdoc-api:2713b2e` → revision `sdoc-api-00006-545`
+  (00005 = code, 00006 = `min-instances=1`), https://sdoc-api-he56zusm2a-as.a.run.app
+  — verified live: `/` dashboard 0.14 s, `/cases` 520 rows, `?q=` 307, `/cases/{id}`
+  six stages, `/review` 17 rows live, `/review/{id}` 307, `/static/app.css`,
+  `/api/submission` 520 entries OK 66 / MISMATCH 46 / NEEDS_REVIEW 17 / null 391;
+  `/debug/store` 404; timeout 1800; no errors in logs.
