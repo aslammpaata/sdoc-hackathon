@@ -28,7 +28,7 @@
 
 {% if case.si or case.bl %}
 <h2>SI vs BL — SI is the source of truth</h2>
-<table>
+<table class="verification-panel {% if case.status == 'OK' %}state-ok{% elif case.status == 'MISMATCH' %}state-mismatch{% else %}state-review{% endif %}">
   <thead><tr><th style="width:12%">Field</th><th style="width:38%">Shipping Instruction</th><th style="width:38%">Draft Bill of Lading</th><th>Outcome</th></tr></thead>
   <tbody>
   {% for f in fields %}
